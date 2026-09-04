@@ -3,35 +3,64 @@ import { readFileSync } from 'node:fs';
 const changeId = process.argv[2];
 if (!changeId) { console.error('usage: e2e-report.mjs <change-id> [results.json]'); process.exit(2); }
 const resultsPath = process.argv[3] ?? 'test-results/e2e-results.json';
-const results = JSON.parse(readFileSync(resultsPath, 'utf8'));
 const planPath = `openspec/changes/${changeId}/test-plan.md`;
 
-const planned = [...new Set(
-  [...readFileSync(planPath, 'utf8').matchAll(/TP-\d{3}/g)].map(m => m[0])
-)];
-
-const rows = [];
-function walk(suite) {
-  for (const s of suite.suites ?? []) walk(s);
-  for (const spec of suite.specs ?? []) {
-    const attempts = spec.tests?.[0]?.results ?? [];
-    const status = attempts.at(-1)?.status ?? 'unknown';
-    const retried = attempts.length > 1;
-    const tagText = [...(spec.tags ?? []), spec.title].join(' ');
-    const tpIds = [...new Set([...tagText.matchAll(/TP-\d{3}/g)].map(m => m[0]))];
-    rows.push({ tpIds, title: spec.title, status, retried });
+function read(path, what) {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch (err) {
+    console.error(`${what} を読めません: ${path} (${err.code ?? err.message})`);
+    process.exit(2);
   }
 }
-for (const suite of results.suites ?? []) walk(suite);
 
+const results = JSON.parse(read(resultsPath, 'Playwright JSON レポート'));
+const planned = [...new Set(
+  [...read(planPath, 'test-plan.md').matchAll(/TP-\d{3}/g)].map(m => m[0])
+)];
+
+// Playwright JSON レポーターの test.status は expected/unexpected/flaky/skipped。
+// results.length > 1 はリトライ済みを意味するだけで、フレークとは限らない
+// (retries>0 では失敗テストも複数 results を持つ)ため status を正とする。
+const STATUS_LABEL = { expected: 'pass', unexpected: 'fail', flaky: 'pass', skipped: 'skip' };
+
+const rows = [];
+function walk(suite, depth = 0, titlePath = []) {
+  // 最上位 suite はファイル名なので、テスト名の前置きには describe だけを使う
+  const path = depth === 0 ? titlePath : [...titlePath, suite.title];
+  for (const s of suite.suites ?? []) walk(s, depth + 1, path);
+  for (const spec of suite.specs ?? []) {
+    const tagText = [...(spec.tags ?? []), spec.title].join(' ');
+    const tpIds = [...new Set([...tagText.matchAll(/TP-\d{3}/g)].map(m => m[0]))];
+    const title = [...path, spec.title].join(' › ');
+    for (const t of spec.tests ?? []) {
+      const attempts = t.results ?? [];
+      const raw = t.status ?? attempts.at(-1)?.status ?? 'unknown';
+      const status = STATUS_LABEL[raw] ?? raw;
+      const flaky = raw === 'flaky';
+      rows.push({ tpIds, title, project: t.projectName || '', status, flaky });
+    }
+  }
+}
+for (const suite of results.suites ?? []) walk(suite, 0);
+
+const multiProject = new Set(rows.map(r => r.project)).size > 1;
 const executed = new Set(rows.flatMap(r => r.tpIds));
 const missing = planned.filter(id => !executed.has(id));
 
 console.log('| TP-ID | テスト | 結果 | フレーク |');
 console.log('|-------|-------|------|---------|');
 for (const r of rows) {
-  console.log(`| ${r.tpIds.join(',') || '-'} | ${r.title} | ${r.status} | ${r.retried ? '⚠' : ''} |`);
+  const title = multiProject && r.project ? `${r.title} [${r.project}]` : r.title;
+  console.log(`| ${r.tpIds.join(',') || '-'} | ${title} | ${r.status} | ${r.flaky ? '⚠' : ''} |`);
 }
+
+const count = s => rows.filter(r => r.status === s).length;
+console.log(
+  `\n合計 ${rows.length} 件: pass ${count('pass')} / fail ${count('fail')} / skip ${count('skip')}` +
+  ` / フレーク ${rows.filter(r => r.flaky).length}`
+);
+
 if (missing.length) {
   console.log(`\n⚠ カバレッジ欠落: ${missing.join(', ')} に対応するテストが未実装/未実行`);
   process.exitCode = 1;

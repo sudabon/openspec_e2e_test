@@ -281,14 +281,24 @@ async function main() {
     const src = join(PAYLOAD, rel);
     let destRel = rel;
 
+    const content = readFileSync(src);
+
     if (rel === 'playwright.config.example.ts') {
-      destRel = existsSync(join(opts.target, 'playwright.config.ts'))
-        ? 'playwright.config.example.ts'
-        : 'playwright.config.ts';
+      // 既存プロジェクトの設定は上書きしない。
+      // config が無ければ .example を外して設置し、既にあれば参考用に .example.ts を置く。
+      // ただし既存 config が payload と同一なら kit が設置したものなので何もしない
+      // (そうしないと 2 回目の実行で .example.ts が増えてしまい冪等でなくなる)。
+      const configPath = join(opts.target, 'playwright.config.ts');
+      if (!existsSync(configPath)) {
+        destRel = 'playwright.config.ts';
+      } else if (readFileSync(configPath).equals(content)) {
+        continue;
+      } else {
+        destRel = 'playwright.config.example.ts';
+      }
     }
 
     const dest = join(opts.target, destRel);
-    const content = readFileSync(src);
 
     if (!existsSync(dest)) {
       planned.push(`create  ${destRel}`);
