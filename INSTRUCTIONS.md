@@ -40,7 +40,7 @@
 
 ```
 openspec_e2e_test/
-├── AGENT_INSTRUCTIONS.md            # 本書(既存)
+├── INSTRUCTIONS.md                  # 本書(既存)
 ├── README.md                        # T8 で作成(導入・更新手順)
 ├── package.json                     # bin: openspec-e2e-kit → install.mjs
 ├── install.mjs                      # インストーラ(Node 標準ライブラリのみ)
