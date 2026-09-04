@@ -14,12 +14,15 @@ description: Playwright E2Eテストの実装規約。openspec change の apply 
 
 ## 構造
 - Page Object Model: セレクタとページ操作は tests/e2e/pages/ に分離
+- fixture は tests/e2e/fixtures/ に置き、fixture 名と作られる状態の対応を
+  同ディレクトリの README.md に記録する
+- 外部依存のモックは tests/e2e/mocks/ に置く。テストファイル内に直接書かない
 - セットアップ/テアダウンは fixture で行う。テスト本体でのログイン操作の繰り返しは禁止
 - 1テスト = 1検証意図。テスト間の順序依存は禁止(各テストが独立して実行可能であること)
 
 ## 安定性
 - page.waitForTimeout / sleep は禁止。自動待機ロケーターと expect のリトライに任せる
-- 外部SaaS(決済・メール等)はモック。自社サービス境界内は実物を使う
+- 外部SaaS(決済・メール等)はモック(tests/e2e/mocks/)。自社サービス境界内は実物を使う
 
 ## タグとトレーサビリティ
 - すべてのテストに { tag: ['@<change-id>', '@TP-NNN'] } を付与
