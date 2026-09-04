@@ -164,6 +164,46 @@ if [ "$rc_clean" -eq 0 ]; then ok "全 pass かつ欠落なしのとき exit 0";
 rc_err=$?
 if [ "$rc_err" -eq 2 ]; then ok "results.json が読めないとき exit 2"; else ng "入力エラーで exit $rc_err (期待: 2)"; fi
 
+# 鮮度検出: 周回ごとの実行で前の周の JSON を読んでしまう事故を防ぐ
+assert_contains "実行開始:" "$report_out" "レポートに実行開始時刻が出力される"
+
+# startTime を実行時に書き換えて、fresh / stale / stats なし の3系統を作る
+node -e "
+  const fs = require('fs');
+  const base = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+  const write = (name, mutate) => {
+    const r = JSON.parse(JSON.stringify(base));
+    mutate(r);
+    fs.writeFileSync(process.argv[2] + '/' + name, JSON.stringify(r));
+  };
+  write('fresh.json', r => { r.stats.startTime = new Date().toISOString(); });
+  write('stale.json', r => { r.stats.startTime = new Date(Date.now() - 3600e3).toISOString(); });
+  write('nostats.json', r => { delete r.stats; });
+" "$KIT_ROOT/test/fixtures/sample-results.json" "$REPORT_WORK"
+
+(cd "$REPORT_WORK" && node "$KIT_ROOT/payload/scripts/e2e-report.mjs" demo-change fresh.json --max-age 300 >/dev/null 2>&1)
+rc_fresh=$?
+if [ "$rc_fresh" -eq 3 ]; then ok "--max-age 内なら鮮度チェックを通過し通常の終了コードになる ($rc_fresh)"; else ng "新鮮な JSON で exit $rc_fresh (期待: 3)"; fi
+
+stale_out="$(cd "$REPORT_WORK" && node "$KIT_ROOT/payload/scripts/e2e-report.mjs" demo-change stale.json --max-age 300 2>&1)"
+rc_stale=$?
+if [ "$rc_stale" -eq 2 ]; then ok "--max-age を超えた古い JSON は exit 2 で中断する ($rc_stale)"; else ng "古い JSON で exit $rc_stale (期待: 2)"; fi
+assert_contains "前の周の結果を読んでいる可能性" "$stale_out" "古い JSON のとき原因の説明が出る"
+if printf '%s' "$stale_out" | grep -qF '| TP-'; then
+  ng "古い JSON なのに結果表を出力した(誤報告の温床)"
+else
+  ok "古い JSON では結果表を出さずに中断する"
+fi
+
+(cd "$REPORT_WORK" && node "$KIT_ROOT/payload/scripts/e2e-report.mjs" demo-change nostats.json --max-age 300 >/dev/null 2>&1)
+rc_nostats=$?
+if [ "$rc_nostats" -eq 2 ]; then ok "実行時刻が無い JSON は検証不能として exit 2 (fail closed)"; else ng "stats 無しで exit $rc_nostats (期待: 2)"; fi
+
+# --max-age 未指定なら鮮度で落とさない(既定の挙動は変えない)
+(cd "$REPORT_WORK" && node "$KIT_ROOT/payload/scripts/e2e-report.mjs" demo-change stale.json >/dev/null 2>&1)
+rc_noflag=$?
+if [ "$rc_noflag" -eq 3 ]; then ok "--max-age 未指定なら古い JSON でも従来どおり動く ($rc_noflag)"; else ng "--max-age 未指定で exit $rc_noflag (期待: 3)"; fi
+
 # 真の失敗(retries により results が2件ある)をフレーク扱いしないこと
 flaky_marks="$(printf '%s' "$report_out" | grep -c '⚠ |')"
 if [ "$flaky_marks" -eq 1 ]; then

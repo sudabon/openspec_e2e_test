@@ -53,18 +53,42 @@ usage: openspec-e2e-kit [install|update] [--force] [--dry-run] [--target <dir>]
 ### `scripts/e2e-report.mjs` の終了コード
 
 ```bash
-node scripts/e2e-report.mjs <change-id> [results.json]
+node scripts/e2e-report.mjs <change-id> [results.json] [--max-age <seconds>]
 ```
 
 | コード | 意味 |
 |--------|------|
 | 0 | 失敗もカバレッジ欠落もなし |
 | 1 | カバレッジ欠落あり(test-plan の TP-ID に対応するテストが未実装/未実行) |
-| 2 | 引数エラー、または `results.json` / `test-plan.md` を読めない |
+| 2 | 引数エラー、`results.json` / `test-plan.md` を読めない、または `--max-age` 超過 |
 | 3 | 失敗したテストあり(欠落の有無は問わない) |
 
 失敗はカバレッジ欠落より重いので、両方あるときは 3 を返す(欠落の警告は出力に載る)。
 レポート転記が目的で終了コードを見ない使い方なら `|| true` を付けて呼ぶ。
+
+### 同じ change を複数回まわすときは `--max-age` を付ける
+
+レビューと修正を2周まわして「1周目 → 2周目」の遷移表を作る使い方には、静かな失敗モードがある。
+2周目の Playwright が JSON を書けなかった場合(設定エラー、起動失敗、`--grep` が0件マッチ、
+途中クラッシュ)、`e2e-report.mjs` は**1周目の古い JSON をそのまま2周目の結果として報告する**。
+「fail → pass で解消」という嘘の遷移が出て、リグレッション検出のために作った表がいちばん
+静かに壊れる。
+
+対策は2段構え。
+
+1. **実行開始時刻を必ず出力する** — 出力の1行目に `実行開始: <ISO8601> (N分前) / 所要 Ns` が入る。
+   1周目と2周目で同じ時刻が並んでいれば、同一実行を2回転記したことが目で見てわかる
+2. **`--max-age <seconds>` で落とす** — 実行開始がその秒数より古ければ結果表を出さずに exit 2。
+   周回ごとに呼ぶ自動化ではこれを付ける。実行時刻が記録されていない場合も検証不能として
+   exit 2 にする(fail closed)
+
+```bash
+# 直前に走らせた実行の結果だけを受け付ける
+node scripts/e2e-report.mjs add-checkout test-results/e2e-results.json --max-age 600
+```
+
+`--max-age` は**テストスイートの所要時間より長く**取る。`stats.startTime` は実行の開始時刻なので、
+30分かかるスイートでは正常な結果でも30分前の値になる。
 
 ## 導入後の開発フロー
 
