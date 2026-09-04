@@ -17,11 +17,33 @@ const CONTEXT_LINES = [
 ];
 const SCHEMA_NAME = 'spec-driven-e2e';
 
-const USAGE = `usage: openspec-e2e-kit [install|update] [--force] [--dry-run] [--target <dir>]
+// payload 内の E2E ルート。導入先の実際のルートを検出して、配置先とファイル内容の
+// 両方をこの文字列から置き換える。payload 側はリテラルのまま置いておくことで、
+// プレースホルダを使わずに payload 単体でも読める・テストできる状態を保つ。
+const E2E_ROOT_DEFAULT = 'tests/e2e';
+
+// 内容に E2E ルートのパスを含み、置換が必要なファイル(payload 相対)
+const E2E_PATH_FILES = new Set([
+  '.claude/skills/e2e-conventions/SKILL.md',
+  'openspec/schemas/spec-driven-e2e/schema.yaml',
+  'scripts/check-test-plan.sh',
+  'playwright.config.example.ts',
+]);
+
+const PW_CONFIG_RE = /^playwright\.config\.(?:[cm]?[jt]s)$/;
+const SCAN_SKIP_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'build', 'out', 'coverage', 'vendor',
+  '.next', '.nuxt', '.svelte-kit', '.turbo', '.cache', '.venv', 'target', 'tmp',
+]);
+const SCAN_MAX_DEPTH = 3;
+
+const USAGE = `usage: openspec-e2e-kit [install|update] [--force] [--dry-run] [--target <dir>] [--e2e-root <path>]
 
   install            payload を対象リポジトリへ導入する(既定)
   update             install と同じ処理。出力の文言が「更新」になる
   --target <dir>     対象ディレクトリ(既定: カレントディレクトリ)
+  --e2e-root <path>  E2E テストの置き場所(target 相対)。省略時は Playwright 設定の
+                     testDir から自動判別し、見つからなければ ${E2E_ROOT_DEFAULT} を使う
   --force            差分のあるファイルを上書きし、git リポジトリ確認をスキップする
   --dry-run          一切書き込まず、実行予定の操作だけを表示する
   -h, --help         このヘルプを表示する`;
@@ -29,7 +51,7 @@ const USAGE = `usage: openspec-e2e-kit [install|update] [--force] [--dry-run] [-
 // ---------------------------------------------------------------- args
 
 function parseArgs(argv) {
-  const opts = { command: null, target: null, force: false, dryRun: false, help: false };
+  const opts = { command: null, target: null, force: false, dryRun: false, help: false, e2eRoot: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === 'install' || a === 'update') {
@@ -48,6 +70,10 @@ function parseArgs(argv) {
     } else if (a.startsWith('--target=')) {
       opts.target = a.slice('--target='.length);
       if (!opts.target) throw new UsageError('--target には値が必要です');
+    } else if (a === '--e2e-root' || a.startsWith('--e2e-root=')) {
+      const v = a.includes('=') ? a.slice('--e2e-root='.length) : argv[++i];
+      if (!v) throw new UsageError('--e2e-root には値が必要です');
+      opts.e2eRoot = normalizeE2eRoot(v);
     } else {
       throw new UsageError(`不明な引数: ${a}`);
     }
@@ -79,6 +105,121 @@ function isInsideGitRepo(dir) {
     if (parent === cur) return false;
     cur = parent;
   }
+}
+
+// ---------------------------------------------------------------- E2E root 検出
+
+/** target 相対の正規化。'./e2e/' → 'e2e'。target の外を指す指定は拒否する */
+function normalizeE2eRoot(value) {
+  const v = String(value).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '').trim();
+  if (!v) throw new UsageError('E2E ルートが空です');
+  if (v.startsWith('/') || /^[A-Za-z]:/.test(v)) {
+    throw new UsageError(`E2E ルートは target 相対で指定してください: ${value}`);
+  }
+  if (v.split('/').includes('..')) {
+    throw new UsageError(`E2E ルートに '..' は使えません: ${value}`);
+  }
+  return v;
+}
+
+/** playwright.config.* を深さ制限付きで探索する(浅い順 → 名前順) */
+function findPlaywrightConfigs(root, dir = root, depth = 0) {
+  if (!existsSync(dir)) return [];
+  const found = [];
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  for (const entry of entries) {
+    if (entry.isFile() && PW_CONFIG_RE.test(entry.name)) {
+      found.push(relative(root, join(dir, entry.name)).split(sep).join('/'));
+    }
+  }
+  if (depth < SCAN_MAX_DEPTH) {
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.') && entry.name !== '.') continue;
+      if (SCAN_SKIP_DIRS.has(entry.name)) continue;
+      found.push(...findPlaywrightConfigs(root, join(dir, entry.name), depth + 1));
+    }
+  }
+  return found.sort((a, b) => {
+    const da = a.split('/').length, db = b.split('/').length;
+    return da !== db ? da - db : a.localeCompare(b);
+  });
+}
+
+/** 設定ファイルから testDir を読む。読めなければ null */
+function parseTestDir(absPath) {
+  let text;
+  try {
+    text = readFileSync(absPath, 'utf8');
+  } catch {
+    return null;
+  }
+  const m = text.match(/testDir\s*:\s*['"`]([^'"`\n]+)['"`]/);
+  return m ? m[1] : null;
+}
+
+/**
+ * E2E ルートを決める。
+ * 優先順: --e2e-root > スタンプの記録 > 設定の testDir > 既存ディレクトリ > 既定
+ * @returns {{root: string, how: string, detected: string|null, configs: string[]}}
+ */
+function resolveE2eRoot(target, flagRoot, stampRoot) {
+  const configs = findPlaywrightConfigs(target);
+
+  // 設定の testDir から検出する(浅い設定を優先)
+  let detected = null;
+  let detectedHow = null;
+  for (const rel of configs) {
+    const testDir = parseTestDir(join(target, rel));
+    if (!testDir) continue;
+    const abs = resolve(dirname(join(target, rel)), testDir);
+    const relRoot = relative(target, abs).split(sep).join('/');
+    if (!relRoot || relRoot.startsWith('..')) continue;
+    detected = relRoot;
+    detectedHow = `${rel} の testDir`;
+    break;
+  }
+
+  // testDir が読めなかった場合は既存ディレクトリから推定する
+  if (!detected) {
+    const candidates = [];
+    for (const rel of configs) {
+      const base = dirname(rel) === '.' ? '' : `${dirname(rel)}/`;
+      candidates.push(`${base}e2e`, `${base}tests/e2e`, `${base}playwright`);
+    }
+    candidates.push(E2E_ROOT_DEFAULT, 'e2e', 'playwright/e2e');
+    for (const c of candidates) {
+      if (existsSync(join(target, c))) {
+        detected = c;
+        detectedHow = `既存ディレクトリ ${c}`;
+        break;
+      }
+    }
+  }
+
+  if (flagRoot) return { root: flagRoot, how: '--e2e-root の指定', detected, configs };
+  if (stampRoot) return { root: stampRoot, how: `${STAMP_FILE} の記録`, detected, configs };
+  if (detected) return { root: detected, how: detectedHow, detected, configs };
+  return { root: E2E_ROOT_DEFAULT, how: '既定値(検出できず)', detected, configs };
+}
+
+/** payload のパスを、検出した E2E ルートに合わせて読み替える */
+function mapDestRel(rel, e2eRoot) {
+  const prefix = `${E2E_ROOT_DEFAULT}/`;
+  if (e2eRoot !== E2E_ROOT_DEFAULT && rel.startsWith(prefix)) {
+    return `${e2eRoot}/${rel.slice(prefix.length)}`;
+  }
+  return rel;
+}
+
+/** ファイル内容の E2E ルートを書き換える */
+function transformContent(rel, buf, e2eRoot) {
+  if (e2eRoot === E2E_ROOT_DEFAULT || !E2E_PATH_FILES.has(rel)) return buf;
+  return Buffer.from(buf.toString('utf8').replaceAll(E2E_ROOT_DEFAULT, e2eRoot), 'utf8');
 }
 
 // ---------------------------------------------------------------- unified diff
@@ -270,6 +411,42 @@ async function main() {
     }
   }
 
+  // E2E ルートの決定
+  const stampPath = join(opts.target, STAMP_FILE);
+  let stampRoot = null;
+  if (existsSync(stampPath)) {
+    try {
+      stampRoot = JSON.parse(readFileSync(stampPath, 'utf8')).e2eRoot ?? null;
+      if (stampRoot) stampRoot = normalizeE2eRoot(stampRoot);
+    } catch {
+      stampRoot = null; // 壊れたスタンプは無視して検出に任せる
+    }
+  }
+  const e2e = resolveE2eRoot(opts.target, opts.e2eRoot, stampRoot);
+  const e2eRoot = e2e.root;
+
+  console.log(`E2E ルート: ${e2eRoot}  (${e2e.how})`);
+  if (e2e.configs.length > 1) {
+    console.log(
+      `  Playwright 設定が ${e2e.configs.length} 件見つかりました。最も浅いものを採用しています。\n` +
+      `  採用: ${e2e.configs[0]}\n` +
+      `  対象外: ${e2e.configs.slice(1).join(', ')}\n` +
+      `  意図と違う場合は --e2e-root <path> で指定してください。`
+    );
+  }
+  if (stampRoot && e2e.detected && e2e.detected !== stampRoot) {
+    console.log(
+      `  ⚠ 記録は '${stampRoot}' ですが、検出結果は '${e2e.detected}' です。` +
+      `記録を優先しました。切り替えるには --e2e-root ${e2e.detected} を指定してください。`
+    );
+  }
+  if (stampRoot && stampRoot !== e2eRoot) {
+    console.log(
+      `  ⚠ 前回は '${stampRoot}' に配置していました。'${stampRoot}' 配下の不要になった` +
+      `ファイルは自動削除しません。手で確認してください。`
+    );
+  }
+
   const planned = [];   // dry-run 用の操作一覧
   const created = [];
   const overwritten = [];
@@ -279,20 +456,22 @@ async function main() {
   // 2. payload の再帰コピー
   for (const rel of walkFiles(PAYLOAD)) {
     const src = join(PAYLOAD, rel);
-    let destRel = rel;
-
-    const content = readFileSync(src);
+    const content = transformContent(rel, readFileSync(src), e2eRoot);
+    let destRel = mapDestRel(rel, e2eRoot);
 
     if (rel === 'playwright.config.example.ts') {
-      // 既存プロジェクトの設定は上書きしない。
-      // config が無ければ .example を外して設置し、既にあれば参考用に .example.ts を置く。
-      // ただし既存 config が payload と同一なら kit が設置したものなので何もしない
-      // (そうしないと 2 回目の実行で .example.ts が増えてしまい冪等でなくなる)。
-      const configPath = join(opts.target, 'playwright.config.ts');
-      if (!existsSync(configPath)) {
+      // 既存プロジェクトの設定は上書きしない。設定は**リポジトリ全体**を探索して
+      // 判定する(ルートだけ見ていると frontend/playwright.config.ts のような
+      // 構成で 2 つ目の設定を作ってしまう)。
+      const rootConfig = join(opts.target, 'playwright.config.ts');
+      const kitPlacedRoot = e2e.configs.length === 1
+        && e2e.configs[0] === 'playwright.config.ts'
+        && existsSync(rootConfig)
+        && readFileSync(rootConfig).equals(content);
+      if (e2e.configs.length === 0) {
         destRel = 'playwright.config.ts';
-      } else if (readFileSync(configPath).equals(content)) {
-        continue;
+      } else if (kitPlacedRoot) {
+        continue; // kit が設置したものなので何もしない(2 回目で .example が増えるのを防ぐ)
       } else {
         destRel = 'playwright.config.example.ts';
       }
@@ -343,10 +522,12 @@ async function main() {
   }
 
   // 4. インストールスタンプ
-  const stampPath = join(opts.target, STAMP_FILE);
-  planned.push(`stamp   ${STAMP_FILE} (version ${version})`);
+  planned.push(`stamp   ${STAMP_FILE} (version ${version}, e2eRoot ${e2eRoot})`);
   if (!opts.dryRun) {
-    writeFileSync(stampPath, JSON.stringify({ version, installedAt: new Date().toISOString() }, null, 2) + '\n');
+    writeFileSync(
+      stampPath,
+      JSON.stringify({ version, installedAt: new Date().toISOString(), e2eRoot }, null, 2) + '\n',
+    );
   }
 
   // 5. 結果表示

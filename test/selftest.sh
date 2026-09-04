@@ -280,6 +280,104 @@ else
   assert_contains "TP-NNN" "$instr_out" "タグ規約が instructions に届いている"
 fi
 
+# ------------------------------------------------------------------ (j)
+step "(j) E2E ルートを Playwright 設定から自動判別する"
+# PostAll のような frontend/ 配下に Playwright がある構成では、payload の
+# tests/e2e/ をそのまま配置すると毎回手作業の付け替えが必要になる。
+mono="/tmp/kit-monorepo"
+rm -rf "$mono"
+mkdir -p "$mono/openspec" "$mono/frontend/e2e"
+git -C "$mono" init -q
+cat > "$mono/frontend/playwright.config.ts" <<'EOF'
+import { defineConfig } from '@playwright/test'
+export default defineConfig({
+  testDir: './e2e',
+  retries: 1,
+})
+EOF
+
+mono_out="$(node "$KIT_ROOT/install.mjs" install --target "$mono" 2>&1)"
+mono_rc=$?
+printf '%s\n' "$mono_out" | sed 's/^/    | /'
+if [ "$mono_rc" -eq 0 ]; then ok "monorepo 構成で install が exit 0"; else ng "install が exit $mono_rc"; fi
+assert_contains "E2E ルート: frontend/e2e" "$mono_out" "frontend/playwright.config.ts の testDir から frontend/e2e を検出する"
+
+# 配置先が検出したルートに読み替わる
+assert_file "$mono/frontend/e2e/fixtures/README.md" "fixtures README が frontend/e2e/ に配置される"
+if [ -e "$mono/tests" ]; then ng "既定パス tests/ が作られてしまった"; else ok "既定パス tests/ は作られない"; fi
+
+# 内容の E2E ルートも置換される
+assert_grep "frontend/e2e/pages/" "$mono/.claude/skills/e2e-conventions/SKILL.md" "SKILL.md の POM パスが置換される"
+assert_grep "frontend/e2e/fixtures/" "$mono/.claude/skills/e2e-conventions/SKILL.md" "SKILL.md の fixtures パスが置換される"
+assert_grep "frontend/e2e/mocks/" "$mono/.claude/skills/e2e-conventions/SKILL.md" "SKILL.md の mocks パスが置換される"
+assert_grep "frontend/e2e/" "$mono/scripts/check-test-plan.sh" "check-test-plan.sh の grep 対象が置換される"
+assert_grep "frontend/e2e/fixtures/README.md" "$mono/openspec/schemas/spec-driven-e2e/schema.yaml" "schema.yaml の instruction のパスが置換される"
+if grep -q 'tests/e2e' "$mono/.claude/skills/e2e-conventions/SKILL.md" "$mono/scripts/check-test-plan.sh"; then
+  ng "置換漏れの tests/e2e が残っている"
+else
+  ok "置換対象ファイルに tests/e2e が残っていない"
+fi
+
+# 既存の Playwright 設定がルート以外にある場合、ルートに2つ目を作らない
+if [ -f "$mono/playwright.config.ts" ]; then
+  ng "ルートに2つ目の playwright.config.ts が作られた"
+else
+  ok "ルートに2つ目の playwright.config.ts を作らない"
+fi
+assert_file "$mono/playwright.config.example.ts" "参考用に playwright.config.example.ts を配置する"
+assert_grep "frontend/e2e" "$mono/playwright.config.example.ts" "example の testDir も置換される"
+
+# スタンプに e2eRoot が記録される
+if node -e "const j=require('$mono/.openspec-e2e-kit.json'); process.exit(j.e2eRoot === 'frontend/e2e' ? 0 : 1)"; then
+  ok ".openspec-e2e-kit.json に e2eRoot が記録される"
+else
+  ng ".openspec-e2e-kit.json の e2eRoot が不正"
+fi
+
+# 冪等性: 置換後の内容と比較していないと2回目で毎回 diff が出る
+mono_before="$(find "$mono" -type f -not -path '*/.git/*' -not -name '.openspec-e2e-kit.json' -exec shasum {} \; | sort | shasum)"
+mono_second="$(node "$KIT_ROOT/install.mjs" install --target "$mono" 2>&1)"
+mono_after="$(find "$mono" -type f -not -path '*/.git/*' -not -name '.openspec-e2e-kit.json' -exec shasum {} \; | sort | shasum)"
+if [ "$mono_before" = "$mono_after" ]; then
+  ok "置換込みでも2回目の install が無変更(冪等)"
+else
+  ng "2回目の install でファイルが変化した(置換後の内容と比較していない)"
+fi
+assert_contains "変更はありません" "$mono_second" "2回目は「変更はありません」と報告する"
+
+# ------------------------------------------------------------------ (k)
+step "(k) E2E ルートの明示指定と複数設定の扱い"
+expl="/tmp/kit-explicit"
+rm -rf "$expl"
+mkdir -p "$expl/openspec"
+git -C "$expl" init -q
+expl_out="$(node "$KIT_ROOT/install.mjs" install --target "$expl" --e2e-root playwright/specs 2>&1)"
+assert_contains "E2E ルート: playwright/specs" "$expl_out" "--e2e-root の指定が優先される"
+assert_file "$expl/playwright/specs/fixtures/README.md" "指定したルートに配置される"
+assert_grep "playwright/specs/pages/" "$expl/.claude/skills/e2e-conventions/SKILL.md" "指定したルートで内容が置換される"
+
+# target の外を指す指定は拒否する
+node "$KIT_ROOT/install.mjs" install --target "$expl" --e2e-root ../outside >/dev/null 2>&1
+rc_escape=$?
+if [ "$rc_escape" -eq 2 ]; then ok "'..' を含む --e2e-root を引数エラーで拒否する"; else ng "'..' 指定で exit $rc_escape (期待: 2)"; fi
+node "$KIT_ROOT/install.mjs" install --target "$expl" --e2e-root /abs/path >/dev/null 2>&1
+rc_abs=$?
+if [ "$rc_abs" -eq 2 ]; then ok "絶対パスの --e2e-root を引数エラーで拒否する"; else ng "絶対パス指定で exit $rc_abs (期待: 2)"; fi
+
+# 複数の Playwright 設定: 最も浅いものを採用し、対象外を警告表示する
+multi="/tmp/kit-multi"
+rm -rf "$multi"
+mkdir -p "$multi/openspec" "$multi/packages/web" "$multi/packages/admin"
+git -C "$multi" init -q
+printf "export default { testDir: './e2e' }\n" > "$multi/packages/web/playwright.config.ts"
+printf "export default { testDir: './e2e' }\n" > "$multi/packages/admin/playwright.config.ts"
+multi_out="$(node "$KIT_ROOT/install.mjs" install --target "$multi" 2>&1)"
+assert_contains "Playwright 設定が 2 件" "$multi_out" "複数設定を検出したことを報告する"
+assert_contains "採用: packages/admin/playwright.config.ts" "$multi_out" "最も浅い(同深さなら名前順)設定を採用する"
+assert_contains "対象外: packages/web/playwright.config.ts" "$multi_out" "対象外にした設定を列挙する"
+assert_contains "--e2e-root" "$multi_out" "指定で上書きできることを案内する"
+assert_file "$multi/packages/admin/e2e/fixtures/README.md" "採用した設定のルートに配置される"
+
 # ------------------------------------------------------------------ 結果
 step "結果"
 printf '  PASS %d / FAIL %d\n' "$pass_count" "$fail_count"

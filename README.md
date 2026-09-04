@@ -31,8 +31,37 @@ npx github:sudabon/openspec_e2e_test update
 意図的に kit 側で揃えたい場合だけ `--force` を付ける。
 
 ```
-usage: openspec-e2e-kit [install|update] [--force] [--dry-run] [--target <dir>]
+usage: openspec-e2e-kit [install|update] [--force] [--dry-run] [--target <dir>] [--e2e-root <path>]
 ```
+
+### E2E ルートの自動判別
+
+E2E テストの置き場所はプロジェクトによって違う(`tests/e2e/`、`e2e/`、
+モノレポなら `frontend/e2e/` など)。インストーラは**リポジトリを探索して自動判別する**ので、
+導入後にパスを付け替える手作業は不要である。
+
+判別の優先順:
+
+1. `--e2e-root <path>` の明示指定
+2. `.openspec-e2e-kit.json` に記録された `e2eRoot`(update 時に配置が動かないようにするため)
+3. **Playwright 設定の `testDir`** — 深さ 3 まで `playwright.config.*` を探し、
+   設定ファイルの位置を基準に `testDir` を解決する
+   (例: `frontend/playwright.config.ts` + `testDir: './e2e'` → `frontend/e2e`)
+4. 既存ディレクトリの存在(`e2e/`、`tests/e2e/`、`playwright/`)
+5. 既定値 `tests/e2e`
+
+判別したルートは、**配置先と配布ファイルの中身の両方**に反映される。
+`e2e-conventions/SKILL.md` の `pages/` `fixtures/` `mocks/`、スキーマの instruction、
+`check-test-plan.sh` の検索対象がすべて実際のパスに書き換わる。
+
+```
+$ npx github:sudabon/openspec_e2e_test --dry-run
+E2E ルート: frontend/e2e  (frontend/playwright.config.ts の testDir)
+```
+
+Playwright 設定が**複数**見つかった場合は最も浅いものを採用し、採用したものと対象外に
+したものを表示する。意図と違えば `--e2e-root` で指定する。
+E2E ルートが前回と変わった場合、**古い場所のファイルは自動削除せず警告のみ**表示する。
 
 ## 導入されるもの
 
@@ -42,8 +71,8 @@ usage: openspec-e2e-kit [install|update] [--force] [--dry-run] [--target <dir>]
 | `.claude/skills/e2e-conventions/SKILL.md` | Playwright E2E の実装規約(ロケーター・構造・安定性・タグ・禁止事項) |
 | `scripts/e2e-report.mjs` | Playwright JSON レポートから TP-ID 別の結果表とカバレッジ欠落を出力 |
 | `scripts/check-test-plan.sh` | change 差分に対し test-plan.md とタグ付きテストの存在を検証(CI 用) |
-| `playwright.config.ts` | 推奨設定。**対象に既存の config があるときは `playwright.config.example.ts` として配置**し、既存設定は上書きしない |
-| `tests/e2e/fixtures/README.md` | シード fixture 名 → 作られる状態の対応表テンプレート |
+| `playwright.config.ts` | 推奨設定。**リポジトリ内のどこかに既存の config があるときは `playwright.config.example.ts` として配置**し、既存設定は上書きしない |
+| `<e2eRoot>/fixtures/README.md` | シード fixture 名 → 作られる状態の対応表テンプレート(パスは自動判別) |
 | `openspec/config.yaml` | `schema: spec-driven-e2e` の追記と、マーカーで囲んだ context ブロックの追記 |
 | `.openspec-e2e-kit.json` | 導入した kit のバージョンと導入時刻 |
 
@@ -119,6 +148,8 @@ jobs:
     uses: sudabon/openspec_e2e_test/.github/workflows/openspec-e2e-gate.yml@main
     with:
       e2e-base-url: http://localhost:3000
+      # package.json と playwright.config.* がルートに無い構成では指定する
+      # working-directory: frontend
 ```
 
 ゲートがやること:
@@ -133,10 +164,13 @@ reusable workflow は**呼び出し側リポジトリの文脈で動く**ため�
 
 1. **kit が導入済みであること** — `scripts/check-test-plan.sh` が存在しないと、
    ゲートはそのステップで失敗する
-2. **`package-lock.json` が存在すること** — 依存インストールに `npm ci` を使うため、
-   lockfile が無いリポジトリや pnpm / yarn を使うリポジトリでは失敗する。
+2. **`working-directory` に `package-lock.json` が存在すること** — 依存インストールに
+   `npm ci` を使うため、lockfile が無いリポジトリや pnpm / yarn を使うリポジトリでは失敗する。
    その場合はこの reusable workflow を使わず、`check-test-plan.sh` の実行と
    `--grep` 付きの `playwright test` を呼び出し側で組むほうが早い
+
+`package.json` と `playwright.config.*` がリポジトリルートに無い構成では
+`working-directory` を指定する。change-id の検出は常にリポジトリルート基準で行われる。
 
 ## OpenSpec をアップグレードしたとき
 

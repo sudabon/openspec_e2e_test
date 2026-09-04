@@ -9,7 +9,8 @@ description: Playwright E2Eテストの実装規約。openspec change の apply 
 
 ## ロケーター
 - getByRole / getByLabel / getByText を最優先。次点 getByTestId
-- 生の CSS / XPath セレクタは禁止
+- page.locator() / page.$() / page.$$() と XPath は禁止。CSS のクラス名だけでなく、
+  要素名だけの指定も禁止(`locator('article')` ではなく `getByRole('article')` を使う)
 - アクセシブルネームに依存するため、UI文言の変更は仕様変更として test-plan に反映してから行う
 
 ## 構造

@@ -8,6 +8,11 @@ on:
       e2e-base-url:
         type: string
         default: http://localhost:3000
+      # npm / Playwright を実行するディレクトリ。package.json と playwright.config.*
+      # がリポジトリルートに無い構成(例: frontend/)ではここを指定する。
+      working-directory:
+        type: string
+        default: .
 
 jobs:
   gate:
@@ -19,17 +24,20 @@ jobs:
         with: { node-version: 20 }
       - name: test-plan とタグ付きテストの存在チェック
         run: bash scripts/check-test-plan.sh "${{ inputs.base-ref }}"
-      # npm ci は呼び出し側リポジトリに package-lock.json があることが前提。
+      # npm ci は working-directory に package-lock.json があることが前提。
       # lockfile が無い / npm 以外のパッケージマネージャを使うリポジトリでは
       # このステップで失敗するため、その場合はこの reusable workflow を使わず
       # 呼び出し側で同等のジョブを組むこと(README の「CI ゲート」を参照)。
       - name: 依存インストール
+        working-directory: ${{ inputs.working-directory }}
         run: npm ci && npx playwright install --with-deps chromium
       - name: change スコープの E2E 実行
+        working-directory: ${{ inputs.working-directory }}
         env:
           E2E_BASE_URL: ${{ inputs.e2e-base-url }}
         run: |
-          ids=$(git diff --name-only "${{ inputs.base-ref }}"...HEAD -- 'openspec/changes/**' \
+          # change-id は openspec のあるリポジトリルート基準で拾う
+          ids=$(git -C "$GITHUB_WORKSPACE" diff --name-only "${{ inputs.base-ref }}"...HEAD -- 'openspec/changes/**' \
             | grep -v '/archive/' | cut -d/ -f3 | sort -u | paste -sd'|' -)
           if [ -n "$ids" ]; then
             npx playwright test --grep "@($ids)|@smoke"
