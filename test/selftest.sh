@@ -179,6 +179,37 @@ else
   ok "--force で差分ファイルを上書きする"
 fi
 
+# ------------------------------------------------------------------ (i)
+step "(i) スキーマが実際の change フローで機能することを検証する"
+# schema validate は構造しか見ないため、openspec 本体のアップグレードで
+# アーティファクトのパイプラインや context の受け渡しが壊れても検出できない。
+# config.yaml が無い対象へ導入し、実際に change を作って確認する。
+if ! command -v openspec >/dev/null 2>&1; then
+  skip "openspec CLI が無いため change フローの検証を省略"
+else
+  pipe="/tmp/kit-pipeline-target"
+  rm -rf "$pipe"
+  mkdir -p "$pipe"
+  git -C "$pipe" init -q
+  node "$KIT_ROOT/install.mjs" install --target "$pipe" >/dev/null 2>&1
+
+  # config.yaml が無い対象では新規作成され、schema が spec-driven-e2e になる
+  assert_grep "schema: spec-driven-e2e" "$pipe/openspec/config.yaml" "config.yaml が無い対象では schema: spec-driven-e2e で新規作成される"
+
+  new_out="$(cd "$pipe" && openspec new change demo-change 2>&1)"
+  status_out="$(cd "$pipe" && openspec status --change demo-change 2>&1)"
+  printf '%s\n' "$status_out" | sed 's/^/    | /'
+
+  assert_contains "Schema: spec-driven-e2e" "$status_out" "config.yaml から spec-driven-e2e が自動検出される"
+  assert_contains "test-plan (blocked by: specs)" "$status_out" "test-plan が specs に依存してパイプラインに現れる"
+  assert_contains "tasks (blocked by: specs, design, test-plan)" "$status_out" "tasks の依存に test-plan が入っている"
+
+  instr_out="$(cd "$pipe" && openspec instructions test-plan --change demo-change 2>&1)"
+  assert_contains "<project_context>" "$instr_out" "test-plan の instructions に project_context が含まれる"
+  assert_contains ".claude/skills/e2e-conventions/SKILL.md" "$instr_out" "config.yaml の context 追記が instructions に届いている"
+  assert_contains "TP-NNN" "$instr_out" "タグ規約が instructions に届いている"
+fi
+
 # ------------------------------------------------------------------ 結果
 step "結果"
 printf '  PASS %d / FAIL %d\n' "$pass_count" "$fail_count"

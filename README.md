@@ -96,13 +96,26 @@ reusable workflow は**呼び出し側リポジトリの文脈で動く**ため�
 ## OpenSpec をアップグレードしたとき
 
 `spec-driven-e2e` はビルトインスキーマの fork なので、OpenSpec 本体のスキーマ形式が変わると
-追従が必要になる。アップグレード後は必ず対象リポジトリで validate を回すこと。
+追従が必要になる。アップグレード後は対象リポジトリで validate を回すこと。
 
 ```bash
 openspec schema validate spec-driven-e2e
 ```
 
-失敗した場合は、この kit 側で `spec-driven` を再 fork し直して `test-plan` アーティファクトの
+ただし `schema validate` は**構造しか見ない**。アーティファクトの依存関係や context の
+受け渡しが壊れていても通ってしまうため、実際の change で確認するほうが確実である。
+
+```bash
+openspec new change tmp-upgrade-check
+openspec status --change tmp-upgrade-check
+#   [-] test-plan (blocked by: specs)
+#   [-] tasks (blocked by: specs, design, test-plan)   ← この2行が出ること
+openspec instructions test-plan --change tmp-upgrade-check | head -30
+#   <project_context> に config.yaml の E2E 2行が入っていること
+```
+
+kit 側のリポジトリではこの検証を `npm test` の (i) で自動化してある。
+失敗した場合は、kit 側で `spec-driven` を再 fork し直して `test-plan` アーティファクトの
 追加を当て直したうえで、`npx github:sudabon/openspec_e2e_test update` で配り直す。
 
 ## kit 自体の開発
