@@ -1,7 +1,16 @@
 import { readFileSync } from 'node:fs';
 
+// 終了コード:
+//   0 = 失敗もカバレッジ欠落もなし
+//   1 = カバレッジ欠落あり(test-plan の TP-ID に対応するテストが未実装/未実行)
+//   2 = 引数エラー、または results.json / test-plan.md を読めない
+//   3 = 失敗したテストあり(欠落の有無は問わない。両方あるときも 3)
+const USAGE = `usage: e2e-report.mjs <change-id> [results.json]
+
+exit code: 0=問題なし / 1=カバレッジ欠落 / 2=引数・入力エラー / 3=失敗テストあり`;
+
 const changeId = process.argv[2];
-if (!changeId) { console.error('usage: e2e-report.mjs <change-id> [results.json]'); process.exit(2); }
+if (!changeId) { console.error(USAGE); process.exit(2); }
 const resultsPath = process.argv[3] ?? 'test-results/e2e-results.json';
 const planPath = `openspec/changes/${changeId}/test-plan.md`;
 
@@ -56,12 +65,16 @@ for (const r of rows) {
 }
 
 const count = s => rows.filter(r => r.status === s).length;
+const failed = count('fail');
 console.log(
-  `\n合計 ${rows.length} 件: pass ${count('pass')} / fail ${count('fail')} / skip ${count('skip')}` +
+  `\n合計 ${rows.length} 件: pass ${count('pass')} / fail ${failed} / skip ${count('skip')}` +
   ` / フレーク ${rows.filter(r => r.flaky).length}`
 );
 
 if (missing.length) {
   console.log(`\n⚠ カバレッジ欠落: ${missing.join(', ')} に対応するテストが未実装/未実行`);
-  process.exitCode = 1;
 }
+
+// 失敗はカバレッジ欠落より重いので 3 を優先する(欠落の警告は上に出力済み)。
+if (failed > 0) process.exitCode = 3;
+else if (missing.length) process.exitCode = 1;

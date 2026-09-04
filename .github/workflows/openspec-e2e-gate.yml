@@ -19,6 +19,10 @@ jobs:
         with: { node-version: 20 }
       - name: test-plan とタグ付きテストの存在チェック
         run: bash scripts/check-test-plan.sh "${{ inputs.base-ref }}"
+      # npm ci は呼び出し側リポジトリに package-lock.json があることが前提。
+      # lockfile が無い / npm 以外のパッケージマネージャを使うリポジトリでは
+      # このステップで失敗するため、その場合はこの reusable workflow を使わず
+      # 呼び出し側で同等のジョブを組むこと(README の「CI ゲート」を参照)。
       - name: 依存インストール
         run: npm ci && npx playwright install --with-deps chromium
       - name: change スコープの E2E 実行

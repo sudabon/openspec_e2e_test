@@ -50,6 +50,22 @@ usage: openspec-e2e-kit [install|update] [--force] [--dry-run] [--target <dir>]
 `openspec/config.yaml` に既に別の `schema:` が設定されている場合は**変更せず警告のみ**表示する。
 その場合は E2E アーティファクトを使うために手動で `schema: spec-driven-e2e` へ変更すること。
 
+### `scripts/e2e-report.mjs` の終了コード
+
+```bash
+node scripts/e2e-report.mjs <change-id> [results.json]
+```
+
+| コード | 意味 |
+|--------|------|
+| 0 | 失敗もカバレッジ欠落もなし |
+| 1 | カバレッジ欠落あり(test-plan の TP-ID に対応するテストが未実装/未実行) |
+| 2 | 引数エラー、または `results.json` / `test-plan.md` を読めない |
+| 3 | 失敗したテストあり(欠落の有無は問わない) |
+
+失敗はカバレッジ欠落より重いので、両方あるときは 3 を返す(欠落の警告は出力に載る)。
+レポート転記が目的で終了コードを見ない使い方なら `|| true` を付けて呼ぶ。
+
 ## 導入後の開発フロー
 
 1. **propose** — `openspec` の change を起票する。`spec-driven-e2e` スキーマでは
@@ -89,9 +105,14 @@ jobs:
 2. change スコープの Playwright 実行 — `--grep "@(<変更された change-id>)|@smoke"`。
    change の差分が無い PR では `@smoke` のみ実行する
 
-reusable workflow は**呼び出し側リポジトリの文脈で動く**ため、`scripts/check-test-plan.sh` が
-存在すること(= この kit が導入済みであること)が前提になる。未導入のリポジトリから呼ぶと
-ゲートはそのステップで失敗する。
+reusable workflow は**呼び出し側リポジトリの文脈で動く**ため、前提が2つある。
+
+1. **kit が導入済みであること** — `scripts/check-test-plan.sh` が存在しないと、
+   ゲートはそのステップで失敗する
+2. **`package-lock.json` が存在すること** — 依存インストールに `npm ci` を使うため、
+   lockfile が無いリポジトリや pnpm / yarn を使うリポジトリでは失敗する。
+   その場合はこの reusable workflow を使わず、`check-test-plan.sh` の実行と
+   `--grep` 付きの `playwright test` を呼び出し側で組むほうが早い
 
 ## OpenSpec をアップグレードしたとき
 

@@ -25,6 +25,12 @@ description: Playwright E2Eテストの実装規約。openspec change の apply 
 - すべてのテストに { tag: ['@<change-id>', '@TP-NNN'] } を付与
 - テスト名は test-plan.md の「操作の意図 + 期待結果」を日本語で要約したものにする
 
+```ts
+test('在庫切れ商品は注文できない', { tag: ['@add-checkout', '@TP-002'] }, async ({ page }) => {
+  // ...
+});
+```
+
 ## 禁止事項
 - 失敗を通すためのアサーション緩和・削除は禁止。期待値の変更が必要な場合は
   仕様変更なので、変更せずに人間へエスカレーションする

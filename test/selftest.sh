@@ -132,7 +132,37 @@ assert_contains "| fail |" "$report_out" "fail のテストが結果表に出る
 assert_contains "⚠ |" "$report_out" "フレークがマークされる"
 assert_contains "TP-004" "$report_out" "欠落 TP-ID が警告に出る"
 assert_contains "カバレッジ欠落" "$report_out" "カバレッジ欠落の警告文が出る"
-if [ "$report_rc" -ne 0 ]; then ok "カバレッジ欠落があるとき exit が非0 ($report_rc)"; else ng "カバレッジ欠落があるのに exit 0"; fi
+if [ "$report_rc" -eq 3 ]; then ok "失敗テストがあるとき exit 3 ($report_rc)"; else ng "失敗テストがあるのに exit $report_rc (期待: 3)"; fi
+
+# 終了コードの3系統を検証する。フィクスチャから失敗 spec を落としたものを派生させる。
+node -e "
+  const fs = require('fs');
+  const r = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+  const strip = s => ({
+    ...s,
+    specs: (s.specs ?? []).filter(sp => sp.ok),
+    ...(s.suites ? { suites: s.suites.map(strip) } : {}),
+  });
+  r.suites = r.suites.map(strip);
+  fs.writeFileSync(process.argv[2], JSON.stringify(r));
+" "$KIT_ROOT/test/fixtures/sample-results.json" "$REPORT_WORK/pass-only.json"
+
+# 全 pass + 欠落あり(TP-002/TP-004 が未実行) → 1
+(cd "$REPORT_WORK" && node "$KIT_ROOT/payload/scripts/e2e-report.mjs" demo-change pass-only.json >/dev/null 2>&1)
+rc_gap=$?
+if [ "$rc_gap" -eq 1 ]; then ok "全 pass でカバレッジ欠落のみのとき exit 1"; else ng "カバレッジ欠落のみで exit $rc_gap (期待: 1)"; fi
+
+# 全 pass + 欠落なし → 0
+mkdir -p "$REPORT_WORK/openspec/changes/clean-change"
+printf '| TP-001 | a |\n| TP-003 | c |\n' > "$REPORT_WORK/openspec/changes/clean-change/test-plan.md"
+(cd "$REPORT_WORK" && node "$KIT_ROOT/payload/scripts/e2e-report.mjs" clean-change pass-only.json >/dev/null 2>&1)
+rc_clean=$?
+if [ "$rc_clean" -eq 0 ]; then ok "全 pass かつ欠落なしのとき exit 0"; else ng "問題なしなのに exit $rc_clean (期待: 0)"; fi
+
+# 読めないファイル → 2
+(cd "$REPORT_WORK" && node "$KIT_ROOT/payload/scripts/e2e-report.mjs" clean-change no-such-file.json >/dev/null 2>&1)
+rc_err=$?
+if [ "$rc_err" -eq 2 ]; then ok "results.json が読めないとき exit 2"; else ng "入力エラーで exit $rc_err (期待: 2)"; fi
 
 # 真の失敗(retries により results が2件ある)をフレーク扱いしないこと
 flaky_marks="$(printf '%s' "$report_out" | grep -c '⚠ |')"
