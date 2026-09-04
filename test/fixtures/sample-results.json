@@ -1,0 +1,197 @@
+{
+  "config": {
+    "configFile": "playwright.config.ts",
+    "rootDir": "/repo/tests/e2e",
+    "version": "1.62.1",
+    "projects": [
+      {
+        "id": "",
+        "name": "",
+        "testDir": "/repo/tests/e2e",
+        "retries": 1
+      }
+    ]
+  },
+  "suites": [
+    {
+      "title": "cart.spec.ts",
+      "file": "cart.spec.ts",
+      "line": 0,
+      "column": 0,
+      "specs": [
+        {
+          "title": "カートに商品を追加すると件数が増える",
+          "ok": true,
+          "tags": [
+            "add-checkout",
+            "TP-003"
+          ],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "status": "failed",
+                  "duration": 2,
+                  "retry": 0,
+                  "startTime": "2026-09-04T04:30:37.532Z",
+                  "error": {
+                    "message": "Error: expect(received).toBeGreaterThan(expected)"
+                  },
+                  "errors": [
+                    {
+                      "message": "Error: expect(received).toBeGreaterThan(expected)"
+                    }
+                  ],
+                  "attachments": [],
+                  "stdout": [],
+                  "stderr": []
+                },
+                {
+                  "workerIndex": 2,
+                  "status": "passed",
+                  "duration": 1,
+                  "retry": 1,
+                  "startTime": "2026-09-04T04:30:37.742Z",
+                  "attachments": [],
+                  "stdout": [],
+                  "stderr": []
+                }
+              ],
+              "status": "flaky"
+            }
+          ],
+          "id": "1981448f0b79506fb670-7b919e811a283e439cf4",
+          "file": "cart.spec.ts",
+          "line": 3,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "title": "checkout.spec.ts",
+      "file": "checkout.spec.ts",
+      "line": 0,
+      "column": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "チェックアウト",
+          "file": "checkout.spec.ts",
+          "line": 3,
+          "column": 6,
+          "specs": [
+            {
+              "title": "カート内の商品を注文できる",
+              "ok": true,
+              "tags": [
+                "add-checkout",
+                "TP-001"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "status": "passed",
+                      "duration": 1,
+                      "retry": 0,
+                      "startTime": "2026-09-04T04:30:37.532Z",
+                      "attachments": [],
+                      "stdout": [],
+                      "stderr": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "25ab1bfc84c57e3e3a45-50f485ec610b3165f217",
+              "file": "checkout.spec.ts",
+              "line": 4,
+              "column": 3
+            },
+            {
+              "title": "在庫切れ商品は注文できない",
+              "ok": false,
+              "tags": [
+                "add-checkout",
+                "TP-002"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "",
+                  "projectName": "",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "status": "failed",
+                      "duration": 1,
+                      "retry": 0,
+                      "startTime": "2026-09-04T04:30:37.544Z",
+                      "error": {
+                        "message": "Error: expect(received).toBe(expected) // Object.is equality"
+                      },
+                      "errors": [
+                        {
+                          "message": "Error: expect(received).toBe(expected) // Object.is equality"
+                        }
+                      ],
+                      "attachments": [],
+                      "stdout": [],
+                      "stderr": []
+                    },
+                    {
+                      "workerIndex": 3,
+                      "status": "failed",
+                      "duration": 2,
+                      "retry": 1,
+                      "startTime": "2026-09-04T04:30:37.742Z",
+                      "error": {
+                        "message": "Error: expect(received).toBe(expected) // Object.is equality"
+                      },
+                      "errors": [
+                        {
+                          "message": "Error: expect(received).toBe(expected) // Object.is equality"
+                        }
+                      ],
+                      "attachments": [],
+                      "stdout": [],
+                      "stderr": []
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "25ab1bfc84c57e3e3a45-8f2f07891928c131b94e",
+              "file": "checkout.spec.ts",
+              "line": 8,
+              "column": 3
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-09-04T04:30:37.353Z",
+    "duration": 407.317,
+    "expected": 1,
+    "skipped": 0,
+    "unexpected": 1,
+    "flaky": 1
+  }
+}

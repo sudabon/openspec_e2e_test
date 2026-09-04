@@ -1,0 +1,21 @@
+{
+  "name": "openspec-e2e-kit",
+  "version": "0.1.0",
+  "description": "Bootstrap kit that distributes an OpenSpec + Playwright E2E test integration (custom schema, conventions skill, reporter scripts, CI gate) into an OpenSpec project.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "openspec-e2e-kit": "./install.mjs"
+  },
+  "scripts": {
+    "test": "bash test/selftest.sh"
+  },
+  "files": [
+    "install.mjs",
+    "payload",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}
