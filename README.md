@@ -1,0 +1,2 @@
+# openspec_e2e_test
+openspecと連動するE2Eテストフレームワーク
