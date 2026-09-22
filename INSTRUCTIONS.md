@@ -259,7 +259,7 @@ Node 標準ライブラリのみで実装する。仕様:
      複数の Playwright 設定で最も浅いものを採用して採用/対象外を報告し `--e2e-root` を案内すること
    - (l) 旧形式(トップレベルのマーカーが `context: |` ごと囲む形)の config.yaml を新形式へ移行し、
      マーカー内にあった kit 以外の行(`Language:`)を保持し、kit の行が重複しないこと。
-     移行後に マーカー外へ追記してから update しても config.yaml が変化しないこと。
+     移行後にマーカー外へ追記してから update しても config.yaml が変化しないこと。
      `openspec instructions test-plan` に kit の行と保持した行の両方が届くこと(openspec が無ければ skip)
    - (m) `openspec init` より前に `--language Japanese` で導入すると Language の3行が context に書かれ、
      未初期化を検出して `--language` なしの init を案内すること。その後の
@@ -275,12 +275,29 @@ Node 標準ライブラリのみで実装する。仕様:
 ### T8: reusable workflow と README
 
 1. `.github/workflows/openspec-e2e-gate.yml` を **付録H** の内容で作成。
+   - 入力 `working-directory`(既定 `.`): npm / Playwright を実行するディレクトリ。
+     `package.json` と `playwright.config.*` がルートに無い構成(例: `frontend/`)で指定する
+   - change-id の検出は `working-directory` に関係なく `GITHUB_WORKSPACE`(リポジトリルート)基準で行う
+   - 依存インストールは `npm ci` なので、`working-directory` に `package-lock.json` があることが前提。
+     lockfile が無い / pnpm・yarn のリポジトリでは失敗するため、その場合は reusable workflow を使わず
+     呼び出し側で同等のジョブを組む(README に明記)
 2. `README.md` を作成。含めるもの:
    - このリポジトリが何か(3行程度)
    - 導入: `npx github:<org>/openspec_e2e_test`(org 名は git remote から取得。
-     remote 未設定ならプレースホルダのままにし、最終レポートで指摘)
-   - 更新: `npx github:<org>/openspec_e2e_test update`
-   - 呼び出し側リポジトリに置く workflow スタブの例(付録H末尾)
+     remote 未設定ならプレースホルダのままにし、最終レポートで指摘)。
+     `openspec init` の前後どちらでも導入できること。前に入れる場合は `--language` を kit 側で指定し、
+     init には付けないこと(config.yaml が既にあると `init --language` はエラーになる)
+   - 更新: `npx github:<org>/openspec_e2e_test update`。usage 行(`--e2e-root` / `--language` を含む)
+   - E2E ルートの自動判別(優先順、配置先と中身の両方に反映されること、複数設定時の扱い、
+     ルートが変わったとき古い場所は自動削除しないこと)
+   - 「導入されるもの」の表(config.yaml 行は「schema の設定と、context 内へのマーカー付きブロックの追記」)
+   - schema の扱い(`spec-driven` は自動で `spec-driven-e2e` に切り替え、それ以外は警告のみ。
+     change 単位なら `--schema spec-driven-e2e`)
+   - 小節「config.yaml の context」: 新形式(マーカーが `context: |` の内側)の例と、
+     旧形式(v0.1.0)からの移行の説明
+   - `scripts/e2e-report.mjs` の終了コード表と、周回運用で `--max-age` を付ける理由
+   - 呼び出し側リポジトリに置く workflow スタブの例(付録H末尾)と、ゲートの前提2つ
+     (kit 導入済み / `package-lock.json` あり)、`working-directory` の指定
    - 導入後の開発フロー(propose → test-plan レビュー → apply → pr-review-codex-fix)の要約
    - openspec アップグレード時の注意(`openspec schema validate spec-driven-e2e` を回す)
 
@@ -288,7 +305,8 @@ Node 標準ライブラリのみで実装する。仕様:
 
 1. `/Users/y-suda/workspace/tribeck/pr_review_automation` を**読み取り専用で**調査し、
    スキルの構造(エントリポイント、2周ループの実装箇所、レポート生成箇所)を把握する。
-2. `docs/pr-review-codex-fix-e2e-design.md` を本リポジトリに作成。内容:
+2. `docs/pr-review-codex-fix-e2e-design.md` を本リポジトリに作成(作成後、レビューと v1 実装を
+   対象側で行うため `pr_review_automation/docs/` へ移動済み。§3 参照)。内容:
    - 現状のスキル構造の要約
    - v1(E2E 実行 + 結果表をレポートに追加)の変更箇所と具体的な差分案
    - v2(失敗分類 → codex 修正タスク接続)の変更方針(実装はしない)
@@ -307,13 +325,16 @@ Node 標準ライブラリのみで実装する。仕様:
 
 ## 5. 受け入れ基準(最終チェックリスト)
 
-- [ ] `npm test` が通る(冪等性・スキーマ validate・レポーターのセルフテスト含む)
+- [ ] `npm test` が通る(冪等性・スキーマ validate・レポーター・E2E ルート判別・
+      config.yaml マージ(旧形式移行 / `--language`)・スタンプ不変 のセルフテスト含む)
 - [ ] `node install.mjs --dry-run --target /tmp/any` が書き込みゼロで動作一覧を出す
 - [ ] payload のスキーマが `openspec schema validate` を通過している
 - [ ] `.claude/commands/` や `.claude/skills/openspec-*` など **openspec 生成物を一切含まない**
 - [ ] package.json に外部 dependencies がない
 - [ ] README だけ読めば第三者が導入できる
+- [ ] 導入済みの対象で `update` を2回実行しても `git status --porcelain` が空(config.yaml・スタンプとも差分なし)
 - [ ] docs/pr-review-codex-fix-e2e-design.md が作成され、レビュー待ちになっている
+      (→ `pr_review_automation/docs/` へ移動済み)
 - [ ] 最終レポート(下記)を出力した
 
 ## 6. 最終レポートの形式
@@ -382,21 +403,31 @@ description: Playwright E2Eテストの実装規約。openspec change の apply 
 
 ## ロケーター
 - getByRole / getByLabel / getByText を最優先。次点 getByTestId
-- 生の CSS / XPath セレクタは禁止
+- page.locator() / page.$() / page.$$() と XPath は禁止。CSS のクラス名だけでなく、
+  要素名だけの指定も禁止(`locator('article')` ではなく `getByRole('article')` を使う)
 - アクセシブルネームに依存するため、UI文言の変更は仕様変更として test-plan に反映してから行う
 
 ## 構造
 - Page Object Model: セレクタとページ操作は tests/e2e/pages/ に分離
+- fixture は tests/e2e/fixtures/ に置き、fixture 名と作られる状態の対応を
+  同ディレクトリの README.md に記録する
+- 外部依存のモックは tests/e2e/mocks/ に置く。テストファイル内に直接書かない
 - セットアップ/テアダウンは fixture で行う。テスト本体でのログイン操作の繰り返しは禁止
 - 1テスト = 1検証意図。テスト間の順序依存は禁止(各テストが独立して実行可能であること)
 
 ## 安定性
 - page.waitForTimeout / sleep は禁止。自動待機ロケーターと expect のリトライに任せる
-- 外部SaaS(決済・メール等)はモック。自社サービス境界内は実物を使う
+- 外部SaaS(決済・メール等)はモック(tests/e2e/mocks/)。自社サービス境界内は実物を使う
 
 ## タグとトレーサビリティ
 - すべてのテストに { tag: ['@<change-id>', '@TP-NNN'] } を付与
 - テスト名は test-plan.md の「操作の意図 + 期待結果」を日本語で要約したものにする
+
+```ts
+test('在庫切れ商品は注文できない', { tag: ['@add-checkout', '@TP-002'] }, async ({ page }) => {
+  // ...
+});
+```
 
 ## 禁止事項
 - 失敗を通すためのアサーション緩和・削除は禁止。期待値の変更が必要な場合は
@@ -404,6 +435,9 @@ description: Playwright E2Eテストの実装規約。openspec change の apply 
 ````
 
 ## 付録D: payload/scripts/e2e-report.mjs(骨格 — T7 で実構造に合わせて調整可)
+
+初期構築時の骨格。現行の実装は `--max-age` と終了コードの分離(T4 参照)を含み、
+原本は `payload/scripts/e2e-report.mjs` を正とする。
 
 ````js
 import { readFileSync } from 'node:fs';
@@ -496,6 +530,16 @@ E2Eテスト: Playwright。実装規約は .claude/skills/e2e-conventions/SKILL.
 テストには必ず @<change-id> と @TP-NNN タグを付ける。
 ```
 
+マーカーごと `context: |` の内側に置く(T6-4)。config.yaml 上の形は次のとおり。
+
+```yaml
+context: |
+  # --- openspec-e2e-kit ---
+  E2Eテスト: Playwright。実装規約は .claude/skills/e2e-conventions/SKILL.md に従う。
+  テストには必ず @<change-id> と @TP-NNN タグを付ける。
+  # --- /openspec-e2e-kit ---
+```
+
 ## 付録H: .github/workflows/openspec-e2e-gate.yml
 
 ````yaml
@@ -509,6 +553,11 @@ on:
       e2e-base-url:
         type: string
         default: http://localhost:3000
+      # npm / Playwright を実行するディレクトリ。package.json と playwright.config.*
+      # がリポジトリルートに無い構成(例: frontend/)ではここを指定する。
+      working-directory:
+        type: string
+        default: .
 
 jobs:
   gate:
@@ -520,13 +569,20 @@ jobs:
         with: { node-version: 20 }
       - name: test-plan とタグ付きテストの存在チェック
         run: bash scripts/check-test-plan.sh "${{ inputs.base-ref }}"
+      # npm ci は working-directory に package-lock.json があることが前提。
+      # lockfile が無い / npm 以外のパッケージマネージャを使うリポジトリでは
+      # このステップで失敗するため、その場合はこの reusable workflow を使わず
+      # 呼び出し側で同等のジョブを組むこと(README の「CI ゲート」を参照)。
       - name: 依存インストール
+        working-directory: ${{ inputs.working-directory }}
         run: npm ci && npx playwright install --with-deps chromium
       - name: change スコープの E2E 実行
+        working-directory: ${{ inputs.working-directory }}
         env:
           E2E_BASE_URL: ${{ inputs.e2e-base-url }}
         run: |
-          ids=$(git diff --name-only "${{ inputs.base-ref }}"...HEAD -- 'openspec/changes/**' \
+          # change-id は openspec のあるリポジトリルート基準で拾う
+          ids=$(git -C "$GITHUB_WORKSPACE" diff --name-only "${{ inputs.base-ref }}"...HEAD -- 'openspec/changes/**' \
             | grep -v '/archive/' | cut -d/ -f3 | sort -u | paste -sd'|' -)
           if [ -n "$ids" ]; then
             npx playwright test --grep "@($ids)|@smoke"
@@ -545,7 +601,12 @@ jobs:
     uses: <org>/openspec_e2e_test/.github/workflows/openspec-e2e-gate.yml@main
     with:
       e2e-base-url: http://localhost:3000
+      # package.json と playwright.config.* がルートに無い構成では指定する
+      # working-directory: frontend
 ````
 
-注: reusable workflow は呼び出し側のリポジトリ文脈で動くため、scripts/check-test-plan.sh は
-kit 導入済み(= payload 配布済み)であることが前提。README にその旨を明記すること。
+注: reusable workflow は呼び出し側のリポジトリ文脈で動くため、前提が2つある。
+(1) scripts/check-test-plan.sh が存在する = kit 導入済み(payload 配布済み)であること。
+(2) `working-directory` に `package-lock.json` があること(`npm ci` を使うため。
+lockfile が無い / pnpm・yarn のリポジトリでは使わず、呼び出し側で同等のジョブを組む)。
+README にその旨を明記すること。
