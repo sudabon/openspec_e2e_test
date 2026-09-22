@@ -1,4 +1,26 @@
+# MacOS
+**/.DS_Store
+
+# Node
 node_modules/
-test-results/
-playwright-report/
-.DS_Store
+
+# Test results
+**test-results/
+**playwright-report/
+
+# IDE
+.idea/
+.vscode/
+.specstory/
+.uv-cache/
+
+# CodingAgent
+.cursor/
+.codex/
+.claude/
+.agents/
+
+# Cursor
+.cursorrules
+.cursorignore
+.cursorindexingignore
