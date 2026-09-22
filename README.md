@@ -1,4 +1,4 @@
-# openspec-e2e-kit
+# openspec-e2e-test
 
 OpenSpec プロジェクトに「仕様シナリオ → E2E テスト観点 → Playwright テスト → PR レビューでの実行」の
 一本の導線を 1 コマンドで組み込む bootstrap kit。カスタムスキーマ・実装規約スキル・レポータ・CI ゲートを
