@@ -13,6 +13,22 @@ OpenSpec 本体のアップグレードで設定が飛ぶことがない。
 npx github:sudabon/openspec_e2e_test
 ```
 
+`openspec init` の前でも後でも導入できる。
+
+```bash
+# openspec init の前に導入する場合
+npx github:sudabon/openspec_e2e_test --language Japanese
+openspec init --tools claude          # --language は付けない
+
+# openspec init の後に導入する場合
+openspec init --tools claude --language Japanese
+npx github:sudabon/openspec_e2e_test
+```
+
+kit が `openspec/config.yaml` を作成した後の `openspec init` に `--language` を付けると
+**エラーで中断する**(OpenSpec は既存の config を `--language` で上書きしない)。
+言語は kit の `--language` で指定する。`openspec init` は既存の config.yaml とカスタムスキーマを保持したまま初期化する。
+
 対象リポジトリのルートで実行する。別ディレクトリを指定する場合は `--target` を使う。
 
 ```bash
@@ -31,7 +47,7 @@ npx github:sudabon/openspec_e2e_test update
 意図的に kit 側で揃えたい場合だけ `--force` を付ける。
 
 ```
-usage: openspec-e2e-kit [install|update] [--force] [--dry-run] [--target <dir>] [--e2e-root <path>]
+usage: openspec-e2e-kit [install|update] [--force] [--dry-run] [--target <dir>] [--e2e-root <path>] [--language <lang>]
 ```
 
 ### E2E ルートの自動判別
@@ -73,11 +89,30 @@ E2E ルートが前回と変わった場合、**古い場所のファイルは�
 | `scripts/check-test-plan.sh` | change 差分に対し test-plan.md とタグ付きテストの存在を検証(CI 用) |
 | `playwright.config.ts` | 推奨設定。**リポジトリ内のどこかに既存の config があるときは `playwright.config.example.ts` として配置**し、既存設定は上書きしない |
 | `<e2eRoot>/fixtures/README.md` | シード fixture 名 → 作られる状態の対応表テンプレート(パスは自動判別) |
-| `openspec/config.yaml` | `schema: spec-driven-e2e` の追記と、マーカーで囲んだ context ブロックの追記 |
+| `openspec/config.yaml` | `schema: spec-driven-e2e` の設定と、context 内へのマーカー付きブロックの追記(新規作成時は `--language` の context も) |
 | `.openspec-e2e-kit.json` | 導入した kit のバージョンと導入時刻 |
 
-`openspec/config.yaml` に既に別の `schema:` が設定されている場合は**変更せず警告のみ**表示する。
-その場合は E2E アーティファクトを使うために手動で `schema: spec-driven-e2e` へ変更すること。
+`openspec init` が書く既定値 `schema: spec-driven` は `spec-driven-e2e` へ自動で切り替える。
+進行中の change は各自の `.openspec.yaml` にスキーマを記録しているので影響を受けない。
+それ以外の `schema:`(例: `quality-driven`)が設定されている場合は**変更せず警告のみ**表示する。
+その場合は手動で `schema: spec-driven-e2e` へ変更するか、change 単位で `--schema spec-driven-e2e` を指定する。
+
+### config.yaml の context
+
+kit の行は `context: |` の**内側**にマーカーで囲んで置き、update ではマーカー間だけを書き換える。
+マーカーの外(`Language:` や他ツールの行)には触らない。
+
+```yaml
+context: |
+  Language: Japanese
+  # --- openspec-e2e-kit ---
+  E2Eテスト: Playwright。実装規約は .claude/skills/e2e-conventions/SKILL.md に従う。
+  テストには必ず @<change-id> と @TP-NNN タグを付ける。
+  # --- /openspec-e2e-kit ---
+```
+
+v0.1.0 は `context: |` ごとトップレベルのマーカーで囲んでいたため、その context に後から追記した行が
+update のたびに消えていた。旧形式を見つけた場合は、kit 以外の行を保持したまま上の形へ移行する。
 
 ### `scripts/e2e-report.mjs` の終了コード
 

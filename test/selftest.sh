@@ -73,7 +73,8 @@ else
 fi
 assert_grep "# --- openspec-e2e-kit ---" "$SANDBOX/openspec/config.yaml" "config.yaml にマーカーブロックが追記された"
 assert_grep ".claude/skills/e2e-conventions/SKILL.md" "$SANDBOX/openspec/config.yaml" "config.yaml に context 追記内容が入っている"
-assert_contains "schema が 'spec-driven'" "$install_out" "既存 schema: spec-driven を書き換えず警告した"
+assert_grep "schema: spec-driven-e2e" "$SANDBOX/openspec/config.yaml" "openspec init 既定の schema: spec-driven を spec-driven-e2e へ切り替えた"
+assert_contains "schema: spec-driven → spec-driven-e2e" "$install_out" "schema の切り替えを報告した"
 assert_file "$SANDBOX/.openspec-e2e-kit.json" ".openspec-e2e-kit.json が書かれた"
 if node -e "const j=require('$SANDBOX/.openspec-e2e-kit.json'); process.exit(j.version && j.installedAt ? 0 : 1)"; then
   ok ".openspec-e2e-kit.json に version と installedAt がある"
@@ -377,6 +378,85 @@ assert_contains "採用: packages/admin/playwright.config.ts" "$multi_out" "最�
 assert_contains "対象外: packages/web/playwright.config.ts" "$multi_out" "対象外にした設定を列挙する"
 assert_contains "--e2e-root" "$multi_out" "指定で上書きできることを案内する"
 assert_file "$multi/packages/admin/e2e/fixtures/README.md" "採用した設定のルートに配置される"
+
+# ------------------------------------------------------------------ (l)
+step "(l) 旧形式のマーカーブロック(context: | ごと囲む形)を移行する"
+legacy="/tmp/kit-legacy-sandbox"
+rm -rf "$legacy"; mkdir -p "$legacy/openspec/specs"; git -C "$legacy" init -q
+cat > "$legacy/openspec/config.yaml" <<'EOF'
+schema: spec-driven-e2e
+
+# --- openspec-e2e-kit ---
+context: |
+  E2Eテスト: Playwright。実装規約は .claude/skills/e2e-conventions/SKILL.md に従う。
+  テストには必ず @<change-id> と @TP-NNN タグを付ける。
+  Language: Japanese
+# --- /openspec-e2e-kit ---
+EOF
+legacy_out="$(node "$KIT_ROOT/install.mjs" update --target "$legacy" 2>&1)"
+assert_contains "旧形式のマーカーブロックを context の内側へ移行" "$legacy_out" "旧形式を検出して移行を報告する"
+if grep -q '^context: |' "$legacy/openspec/config.yaml" && grep -q '^  # --- openspec-e2e-kit ---' "$legacy/openspec/config.yaml"; then
+  ok "context: | がトップレベル、マーカーが context の内側になる"
+else
+  ng "移行後の形が不正"; sed 's/^/    | /' "$legacy/openspec/config.yaml"
+fi
+assert_grep "  Language: Japanese" "$legacy/openspec/config.yaml" "マーカー内にあった kit 以外の行(Language)を保持する"
+if [ "$(grep -c 'E2Eテスト: Playwright' "$legacy/openspec/config.yaml")" = "1" ]; then ok "kit の行が重複しない"; else ng "kit の行が重複した"; fi
+printf '  他ツールが追記した行\n' >> "$legacy/openspec/config.yaml"
+legacy_hash="$(shasum "$legacy/openspec/config.yaml")"
+node "$KIT_ROOT/install.mjs" update --target "$legacy" >/dev/null 2>&1
+if [ "$legacy_hash" = "$(shasum "$legacy/openspec/config.yaml")" ]; then
+  ok "移行後の update は冪等で、マーカー外に追記された行を消さない"
+else
+  ng "移行後の update で config.yaml が変化した"; sed 's/^/    | /' "$legacy/openspec/config.yaml"
+fi
+if command -v openspec >/dev/null 2>&1; then
+  (cd "$legacy" && openspec new change legacy-check >/dev/null 2>&1)
+  legacy_instr="$(cd "$legacy" && openspec instructions test-plan --change legacy-check 2>&1)"
+  assert_contains "Language: Japanese" "$legacy_instr" "移行後の context が YAML として読める(Language が届く)"
+  assert_contains "他ツールが追記した行" "$legacy_instr" "マーカー外の追記行も context として届く"
+  assert_contains ".claude/skills/e2e-conventions/SKILL.md" "$legacy_instr" "kit の context 行も届く"
+else
+  skip "openspec CLI が無いため移行後の instructions 検証を省略"
+fi
+
+# ------------------------------------------------------------------ (m)
+step "(m) openspec init より前に --language 付きで導入する"
+preinit="/tmp/kit-preinit-sandbox"
+rm -rf "$preinit"; mkdir -p "$preinit"; git -C "$preinit" init -q
+preinit_out="$(node "$KIT_ROOT/install.mjs" --target "$preinit" --language Japanese 2>&1)"
+assert_grep "  Language: Japanese" "$preinit/openspec/config.yaml" "--language の context を書き込む"
+assert_contains "openspec init --tools" "$preinit_out" "未初期化を検出し、--language なしの init を案内する"
+if command -v openspec >/dev/null 2>&1; then
+  if (cd "$preinit" && openspec init --tools claude --no-animation . >/dev/null 2>&1); then
+    ok "導入後の openspec init(--language なし)が成功する"
+  else
+    ng "導入後の openspec init が失敗した"
+  fi
+  assert_grep "schema: spec-driven-e2e" "$preinit/openspec/config.yaml" "init 後も schema が保持される"
+  assert_grep "  Language: Japanese" "$preinit/openspec/config.yaml" "init 後も Language が保持される"
+  (cd "$preinit" && openspec new change pre-check >/dev/null 2>&1)
+  pre_instr="$(cd "$preinit" && openspec instructions test-plan --change pre-check 2>&1)"
+  assert_contains "Language: Japanese" "$pre_instr" "Language が instructions に届く"
+  assert_contains ".claude/skills/e2e-conventions/SKILL.md" "$pre_instr" "kit の context も instructions に届く"
+  post_lang_out="$(node "$KIT_ROOT/install.mjs" update --target "$preinit" 2>&1)"
+  assert_contains "変更はありません" "$post_lang_out" "init 後の update は変更なし"
+else
+  skip "openspec CLI が無いため init 連携の検証を省略"
+fi
+lang_warn_out="$(node "$KIT_ROOT/install.mjs" update --target "$SANDBOX" --language Japanese 2>&1)"
+assert_contains "--language は反映しません" "$lang_warn_out" "既存 config.yaml に --language を指定すると警告のみ"
+
+# ------------------------------------------------------------------ (n)
+step "(n) no-op の update でスタンプを書き換えない"
+stamp_before="$(shasum "$SANDBOX/.openspec-e2e-kit.json")"
+sleep 1
+node "$KIT_ROOT/install.mjs" update --target "$SANDBOX" >/dev/null 2>&1
+if [ "$stamp_before" = "$(shasum "$SANDBOX/.openspec-e2e-kit.json")" ]; then
+  ok ".openspec-e2e-kit.json が変化しない(git 差分を作らない)"
+else
+  ng ".openspec-e2e-kit.json が書き換わった"
+fi
 
 # ------------------------------------------------------------------ 結果
 step "結果"
