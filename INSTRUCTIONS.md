@@ -233,19 +233,44 @@ Node 標準ライブラリのみで実装する。仕様:
    タグに TP-001〜TP-003 を含む)。**可能なら実際に最小の Playwright プロジェクトを
    `/tmp` に作って本物の JSON 出力を採取し、それを整形して使うこと**(構造の正確性が目的)。
    採取した場合、e2e-report.mjs のパース処理(付録D)を実構造に合わせて修正してよい。
-2. `test/selftest.sh` を作成。内容:
-   - (a) `/tmp/kit-sandbox` を作り直し、最小の openspec プロジェクト構造を用意
+2. `test/selftest.sh` を作成。内容(破壊的操作は `/tmp` 配下のサンドボックスに限定する):
+   - (a) `/tmp/kit-sandbox` を作り直し、最小の openspec プロジェクト構造
+     (`schema: spec-driven` の config.yaml を含む)を用意
    - (b) `node install.mjs install --target /tmp/kit-sandbox` を実行
-   - (c) スキーマ・スキル・scripts が配置されたこと、config.yaml がマージされたことを assert
+   - (c) スキーマ・スキル・scripts が配置されたこと、config.yaml がマージされたこと
+     (`schema: spec-driven` が `spec-driven-e2e` へ切り替わり、切り替えを報告したこと)を assert
    - (d) もう一度 install を実行し、**2回目が無変更で終わる(冪等)** ことを assert
    - (e) sandbox 内で `openspec schema validate spec-driven-e2e` が通ることを assert
-     (CLI が無い CI 環境を考慮し、openspec が無ければ (e) は skip と表示)
+     (CLI が無い CI 環境を考慮し、openspec が無ければ skip と表示)
    - (f) `test/fixtures/sample-results.json` と架空の test-plan.md を使って
      `e2e-report.mjs` を実行し、結果表に pass/fail/フレークが出ること、
-     欠落 TP-ID の警告が出ることを assert
+     欠落 TP-ID の警告が出ること、終了コード(0/1/2/3)の分離、
+     `--max-age` の fresh / stale / `stats` なし / 未指定 の4系統を assert
+   - (g) `--dry-run` が書き込みゼロで実行予定一覧を出し exit 0 で終わること
+   - (h) 既存ファイルがある対象での差分ハンドリング(diff 表示と skip、skip 一覧、
+     `--force` での上書き、既存 `playwright.config.ts` を上書きせず `.example.ts` で配置)
+   - (i) 実際の change フロー(`openspec new change` → `status` → `instructions test-plan`)で
+     test-plan が specs に依存してパイプラインに現れ、config.yaml の context が
+     `<project_context>` に届くこと(openspec が無ければ skip)
+   - (j) monorepo 構成(`frontend/playwright.config.ts` + `testDir: './e2e'`)で E2E ルートを
+     `frontend/e2e` と判別し、配置先と 4 ファイルの中身が置換され、ルートに2つ目の
+     `playwright.config.ts` を作らず、スタンプに `e2eRoot` が記録され、置換込みでも2回目が冪等であること
+   - (k) `--e2e-root` の明示指定が優先されること、`..` や絶対パスを引数エラー(exit 2)で拒否すること、
+     複数の Playwright 設定で最も浅いものを採用して採用/対象外を報告し `--e2e-root` を案内すること
+   - (l) 旧形式(トップレベルのマーカーが `context: |` ごと囲む形)の config.yaml を新形式へ移行し、
+     マーカー内にあった kit 以外の行(`Language:`)を保持し、kit の行が重複しないこと。
+     移行後に マーカー外へ追記してから update しても config.yaml が変化しないこと。
+     `openspec instructions test-plan` に kit の行と保持した行の両方が届くこと(openspec が無ければ skip)
+   - (m) `openspec init` より前に `--language Japanese` で導入すると Language の3行が context に書かれ、
+     未初期化を検出して `--language` なしの init を案内すること。その後の
+     `openspec init --tools claude --no-animation` が成功し、schema と Language が保持され、
+     instructions に両方届き、init 後の update が「変更はありません」になること(openspec が無ければ skip)。
+     既存 config.yaml に `--language` を指定すると警告のみであること
+   - (n) no-op の update で `.openspec-e2e-kit.json` のハッシュが変化しないこと
 3. `npm test` が通ること。
 
-**完了条件**: `npm test` が exit 0 で、(a)〜(f) の各 assert 結果が出力に表示される。
+**完了条件**: `npm test` が exit 0 で、(a)〜(n) の各 assert 結果が出力に表示される
+(現行: PASS 103 / FAIL 0。openspec CLI が無い環境では連携部分が skip になる)。
 
 ### T8: reusable workflow と README
 
