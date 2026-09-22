@@ -4,6 +4,12 @@
 **openspec プロジェクトに E2E テスト統合一式を配布する bootstrap kit** として構築する。
 この文書は自己完結しており、必要な仕様・ファイル内容はすべて本文と付録にある。
 
+> **本書の位置づけ**: 初期構築(T1〜T9)の指示書として書かれ、その後の変更
+> (E2E ルートの自動判別、`--language` と init 前導入、config.yaml の context マージ修正、
+> `e2e-report.mjs` の `--max-age` と終了コード、CI ゲートの `working-directory`)を反映して
+> 現行仕様(v0.2.0)に揃えてある。構築後はファイル内容の原本は `payload/` と各実ファイルを正とし、
+> 付録は参照用とする。
+
 ---
 
 ## 1. 背景と目的
@@ -42,6 +48,7 @@
 openspec_e2e_test/
 ├── INSTRUCTIONS.md                  # 本書(既存)
 ├── README.md                        # T8 で作成(導入・更新手順)
+├── LICENSE                          # MIT
 ├── package.json                     # bin: openspec-e2e-kit → install.mjs
 ├── install.mjs                      # インストーラ(Node 標準ライブラリのみ)
 ├── payload/                         # 配布物の原本
@@ -53,26 +60,29 @@ openspec_e2e_test/
 │   │   ├── e2e-report.mjs
 │   │   └── check-test-plan.sh
 │   ├── playwright.config.example.ts
-│   └── tests/e2e/fixtures/README.md
+│   └── tests/e2e/fixtures/README.md # tests/e2e はリテラル。導入時に実際の E2E ルートへ置換される(T6)
 ├── .github/workflows/
 │   └── openspec-e2e-gate.yml        # reusable workflow (workflow_call)
-├── test/
-│   ├── fixtures/sample-results.json # e2e-report.mjs のセルフテスト用
-│   └── selftest.sh                  # npm test から呼ぶ
-└── docs/
-    └── pr-review-codex-fix-e2e-design.md  # T9 で作成(設計書)
+└── test/
+    ├── fixtures/sample-results.json # e2e-report.mjs のセルフテスト用
+    └── selftest.sh                  # npm test から呼ぶ
 ```
+
+T9 の設計書 `docs/pr-review-codex-fix-e2e-design.md` は本リポジトリで作成したのち、
+レビューと v1 実装を対象側で行うため `pr_review_automation/docs/` へ移した(本リポジトリには無い)。
 
 ## 4. タスク一覧
 
 ### T1: 環境確認とリポジトリ初期化
 
 1. `node --version`(20 以上)を確認。
-2. openspec CLI を確認: `openspec --version`。未導入なら `npm i -g @fission-ai/openspec`。
+2. openspec CLI を確認: `openspec --version`。未導入なら `npm i -g @fission-ai/openspec`
+   (現行のセルフテストは 1.13.1 で検証。`openspec init --tools <tool> --no-animation` と
+   `--language` の挙動に依存する)。
 3. `openspec schema --help` を実行し、fork / validate / which 相当のサブコマンドが
    存在することを確認(なければ §2-4 に従い読み替え方針を決めてから進む)。
 4. `package.json` を作成:
-   - `"name": "openspec-e2e-kit"`, `"version": "0.1.0"`, `"type": "module"`
+   - `"name": "openspec-e2e-kit"`, `"version": "0.2.0"`, `"type": "module"`
    - `"bin": { "openspec-e2e-kit": "./install.mjs" }`
    - `"scripts": { "test": "bash test/selftest.sh" }`
    - dependencies は**空**にすること(インストーラは Node 標準ライブラリのみで書く)
@@ -105,45 +115,114 @@ schema.yaml の diff(fork 直後 → 変更後)を最終レポートに含める
 
 `payload/.claude/skills/e2e-conventions/SKILL.md` を **付録C** の内容で作成する。
 一字一句このままでよい(改善提案があれば実施せず、最終レポートで提案すること)。
+ファイル内の `tests/e2e/` は導入時に実際の E2E ルートへ置換される(T6)。
 
 ### T4: scripts(payload/scripts/)
 
-1. `payload/scripts/e2e-report.mjs` を **付録D** をベースに作成。
+1. `payload/scripts/e2e-report.mjs` を **付録D** をベースに作成。現行の仕様:
+   - CLI: `e2e-report.mjs <change-id> [results.json] [--max-age <seconds>]`
+   - 出力の1行目に `実行開始: <ISO8601> (N分前) / 所要 Ns` を常に出す
+     (周回ごとに呼ぶ運用で、前の周の JSON を二重転記したことが目で見てわかるようにする)
+   - `--max-age`: results.json の `stats.startTime` がその秒数より古ければ結果表を出さずに exit 2。
+     `stats.startTime` が無い場合も検証不能として exit 2(fail closed)。未指定時の挙動は変えない
+   - 終了コード: 0=問題なし / 1=カバレッジ欠落 / 2=引数・入力エラー・`--max-age` 超過 /
+     3=失敗テストあり(欠落の有無は問わない。両方あるときも 3)
 2. `payload/scripts/check-test-plan.sh` を **付録E** の内容で作成し、実行権限を付与。
+   検索対象の `tests/e2e/` は導入時に実際の E2E ルートへ置換される(T6)。
 
 ### T5: Playwright 設定と fixtures README(payload/)
 
 1. `payload/playwright.config.example.ts` を **付録F** の内容で作成。
    ファイル名を `.example.ts` にしている理由: 既存プロジェクトの設定を上書きしないため。
-   install.mjs は対象に `playwright.config.ts` が**無い場合のみ** `.example` を外して配置する。
+   install.mjs は**リポジトリ内のどこにも** `playwright.config.*` が無い場合のみ `.example` を外して配置する
+   (ルートだけを見ると `frontend/` に設定がある構成でルートに2つ目の設定を作ってしまう)。
 2. `payload/tests/e2e/fixtures/README.md` を作成。内容: 「fixture 名 → 作られる状態」の
    対応表テンプレート(空の表 + 記入例1行)と、シードAPI方式/fixture直接方式の説明2〜3行。
+   配置先の `tests/e2e/` は導入時に実際の E2E ルートへ置き換わる(T6)。
 
 ### T6: install.mjs(インストーラ本体)
 
 Node 標準ライブラリのみで実装する。仕様:
 
-**CLI**: `openspec-e2e-kit [install|update] [--force] [--dry-run] [--target <dir>]`
+**CLI**: `openspec-e2e-kit [install|update] [--force] [--dry-run] [--target <dir>] [--e2e-root <path>] [--language <lang>]`
 - サブコマンド省略時は `install`。`--target` 省略時はカレントディレクトリ。
 - `update` は `install` と同処理でよいが、出力の文言を「更新」にする。
+- `--e2e-root <path>`: E2E テストの置き場所(target 相対)。省略時は下記 2 の優先順で自動判別する。
+  `--e2e-root=<path>` 形式も受け付ける。target の外を指す指定は拒否する。
+- `--language <lang>`: config.yaml を**新規作成するとき**だけ、artifact の言語を context に書く
+  (`openspec init --language` と同じ3行)。`--language=<lang>` 形式も受け付け、空値は引数エラー。
 
 **動作**:
 1. `--target` が git リポジトリでない場合は警告して確認を求める(`--force` でスキップ)。
-2. `payload/` 配下の全ファイルを target へ再帰コピー。ただし:
+2. E2E ルートの決定。優先順:
+   1. `--e2e-root` の明示指定
+   2. `.openspec-e2e-kit.json` に記録された `e2eRoot`(update 時に配置が動かないようにする)
+   3. Playwright 設定の `testDir` — 深さ 3 まで `playwright.config.{js,cjs,mjs,ts,cts,mts}` を探し、
+      設定ファイルの位置を基準に解決する(例: `frontend/playwright.config.ts` + `testDir: './e2e'` → `frontend/e2e`)。
+      複数見つかった場合は最も浅いものを採用し、採用/対象外を表示して `--e2e-root` を案内する
+   4. 既存ディレクトリ(`e2e/`、`tests/e2e/`、`playwright/` など)
+   5. 既定値 `tests/e2e`
+
+   判別したルートは、**配置先**(payload の `tests/e2e/` 配下)と、内容にパスを含む 4 ファイル
+   (`e2e-conventions/SKILL.md`、`schema.yaml` の instruction、`check-test-plan.sh`、
+   `playwright.config.example.ts`)の**中身**の両方に反映する。payload 側はプレースホルダを使わず
+   `tests/e2e` のリテラルのまま置く(payload 単体で読める・テストできる状態を保つ)。
+   前回のスタンプと異なるルートになった場合、**古い場所のファイルは自動削除せず警告のみ**出す。
+3. `payload/` 配下の全ファイルを target へ再帰コピー。ただし:
+   - 比較は E2E ルート置換**後**の内容で行う(生の payload と比較すると2回目の install で毎回 diff が出る)
    - target に同一内容のファイルがある → skip(サイレント)
    - target に**異なる内容**のファイルがある → unified diff を表示して skip。
      `--force` 時のみ上書き。skip したファイルは最後に一覧表示。
-   - `playwright.config.example.ts` は特別扱い: target に `playwright.config.ts` が
+   - `playwright.config.example.ts` は特別扱い: リポジトリ内のどこにも `playwright.config.*` が
      無ければ `playwright.config.ts` として配置、あれば `.example.ts` のまま配置。
-3. `openspec/config.yaml` のマージ(冪等):
-   - `schema:` キーが無ければ `schema: spec-driven-e2e` を追加。既に別値があれば
-     変更せず警告表示。
-   - マーカー `# --- openspec-e2e-kit ---` 〜 `# --- /openspec-e2e-kit ---` で囲んだ
-     context 追記ブロック(内容は付録Gの2行)を追加。マーカーが既にあればブロックを置換。
-   - config.yaml 自体が無ければ、schema 行とマーカーブロックだけの config.yaml を新規作成。
-4. `.openspec-e2e-kit.json` を target 直下に書く: `{ "version": <package.jsonのversion>, "installedAt": <ISO8601> }`
-5. `--dry-run` 時は一切書き込まず、実行予定の操作を一覧表示する。
-6. 終了コード: 正常 0(skip があっても 0)、引数エラー・例外時のみ非 0。
+   - `.sh` は payload 側の実行ビットを引き継いで配置する。
+4. `openspec/config.yaml` のマージ(冪等):
+   - `schema:` キーが無ければ `schema: spec-driven-e2e` を先頭に追加。
+     値が `spec-driven`(`openspec init` の既定値)なら `spec-driven-e2e` に書き換え、
+     「schema: spec-driven → spec-driven-e2e(進行中の change は各自の .openspec.yaml のスキーマのまま)」と出す
+     (`openspec new change` は `.openspec.yaml` に `schema:` を記録し、スキーマ解決でプロジェクト設定より
+     優先されるため、既定値を変えても進行中の change は影響を受けない)。
+     それ以外の値(例: `quality-driven`)は変更せず警告し、change 単位の指定方法
+     `openspec new change <name> --schema spec-driven-e2e` を添える。
+   - kit の context 行(付録Gの2行)は、マーカー `# --- openspec-e2e-kit ---` 〜 `# --- /openspec-e2e-kit ---`
+     で囲んで `context: |` の**内側**に置く(マーカー行も context のインデントに揃える)。
+     update ではマーカー間だけを kit の行に揃え、マーカー外の行(`Language:` や他ツールの行)には触らない。
+     マーカー間に kit 以外の行が紛れていたら、消さずにマーカーの直前へ退避する。
+   - 既存 config に `context:` が無ければ、末尾に `context: |` + マーカーブロックを追加する。
+     `context: |` があれば、その literal block の末尾に同じインデントで追記する。
+     `context:` が literal block 以外の形なら変更せず警告する。
+   - **旧形式**(v0.1.0: インデントなしのマーカーが `context: |` ごと囲む形)を見つけたら新形式へ移行する。
+     マーカー内の `context: |` 以降で kit の2行と一致しない非空行は「kit 以外の行」として保持し、
+     kit のマーカーブロックの前に置く。「旧形式のマーカーブロックを context の内側へ移行(kit 以外の N 行を保持)」と出す。
+     (旧形式では context に後から追記した行がマーカー内に入り、update のたびに消えていた)
+   - config.yaml 自体が無ければ新規作成する。形は次のとおり(`--language` 指定時は context の先頭に3行を足す):
+
+     ```yaml
+     schema: spec-driven-e2e
+
+     context: |
+       Language: <lang>
+       All artifacts must be written in <lang>.
+       Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+       # --- openspec-e2e-kit ---
+       E2Eテスト: Playwright。実装規約は .claude/skills/e2e-conventions/SKILL.md に従う。
+       テストには必ず @<change-id> と @TP-NNN タグを付ける。
+       # --- /openspec-e2e-kit ---
+     ```
+
+   - config.yaml が既にあり、context に `Language:` 行が無いまま `--language` を指定された場合は、
+     変更せず警告だけ出す(`openspec init --language` と同じ扱い)。
+5. `.openspec-e2e-kit.json` を target 直下に書く:
+   `{ "version": <package.jsonのversion>, "installedAt": <ISO8601>, "e2eRoot": <判別したルート> }`。
+   ただし既存スタンプと `version`・`e2eRoot` が同じなら**書かない**(no-op の update で git 差分を作らない)。
+   dry-run の実行予定一覧にも、書く場合だけ `stamp` 行を出す。
+6. `openspec/specs` が無い(= `openspec init` 前の)対象では、最後に次を案内する:
+   「次のステップ: `openspec init --tools <tool>`。config.yaml が既にあるため `--language` を付けるとエラーになる。
+   言語は kit の `--language` で指定する」
+   (OpenSpec 1.13.1: 既存の config.yaml とカスタムスキーマは保持したまま init されるが、
+   `--language` は既存 config を上書きしないためエラーで中断する)
+7. `--dry-run` 時は一切書き込まず、実行予定の操作を一覧表示する。
+8. 終了コード: 正常 0(skip があっても 0)、引数エラー・例外時のみ非 0。
 
 **完了条件**: T7 のセルフテストで検証されること。
 
@@ -154,19 +233,44 @@ Node 標準ライブラリのみで実装する。仕様:
    タグに TP-001〜TP-003 を含む)。**可能なら実際に最小の Playwright プロジェクトを
    `/tmp` に作って本物の JSON 出力を採取し、それを整形して使うこと**(構造の正確性が目的)。
    採取した場合、e2e-report.mjs のパース処理(付録D)を実構造に合わせて修正してよい。
-2. `test/selftest.sh` を作成。内容:
-   - (a) `/tmp/kit-sandbox` を作り直し、最小の openspec プロジェクト構造を用意
+2. `test/selftest.sh` を作成。内容(破壊的操作は `/tmp` 配下のサンドボックスに限定する):
+   - (a) `/tmp/kit-sandbox` を作り直し、最小の openspec プロジェクト構造
+     (`schema: spec-driven` の config.yaml を含む)を用意
    - (b) `node install.mjs install --target /tmp/kit-sandbox` を実行
-   - (c) スキーマ・スキル・scripts が配置されたこと、config.yaml がマージされたことを assert
+   - (c) スキーマ・スキル・scripts が配置されたこと、config.yaml がマージされたこと
+     (`schema: spec-driven` が `spec-driven-e2e` へ切り替わり、切り替えを報告したこと)を assert
    - (d) もう一度 install を実行し、**2回目が無変更で終わる(冪等)** ことを assert
    - (e) sandbox 内で `openspec schema validate spec-driven-e2e` が通ることを assert
-     (CLI が無い CI 環境を考慮し、openspec が無ければ (e) は skip と表示)
+     (CLI が無い CI 環境を考慮し、openspec が無ければ skip と表示)
    - (f) `test/fixtures/sample-results.json` と架空の test-plan.md を使って
      `e2e-report.mjs` を実行し、結果表に pass/fail/フレークが出ること、
-     欠落 TP-ID の警告が出ることを assert
+     欠落 TP-ID の警告が出ること、終了コード(0/1/2/3)の分離、
+     `--max-age` の fresh / stale / `stats` なし / 未指定 の4系統を assert
+   - (g) `--dry-run` が書き込みゼロで実行予定一覧を出し exit 0 で終わること
+   - (h) 既存ファイルがある対象での差分ハンドリング(diff 表示と skip、skip 一覧、
+     `--force` での上書き、既存 `playwright.config.ts` を上書きせず `.example.ts` で配置)
+   - (i) 実際の change フロー(`openspec new change` → `status` → `instructions test-plan`)で
+     test-plan が specs に依存してパイプラインに現れ、config.yaml の context が
+     `<project_context>` に届くこと(openspec が無ければ skip)
+   - (j) monorepo 構成(`frontend/playwright.config.ts` + `testDir: './e2e'`)で E2E ルートを
+     `frontend/e2e` と判別し、配置先と 4 ファイルの中身が置換され、ルートに2つ目の
+     `playwright.config.ts` を作らず、スタンプに `e2eRoot` が記録され、置換込みでも2回目が冪等であること
+   - (k) `--e2e-root` の明示指定が優先されること、`..` や絶対パスを引数エラー(exit 2)で拒否すること、
+     複数の Playwright 設定で最も浅いものを採用して採用/対象外を報告し `--e2e-root` を案内すること
+   - (l) 旧形式(トップレベルのマーカーが `context: |` ごと囲む形)の config.yaml を新形式へ移行し、
+     マーカー内にあった kit 以外の行(`Language:`)を保持し、kit の行が重複しないこと。
+     移行後に マーカー外へ追記してから update しても config.yaml が変化しないこと。
+     `openspec instructions test-plan` に kit の行と保持した行の両方が届くこと(openspec が無ければ skip)
+   - (m) `openspec init` より前に `--language Japanese` で導入すると Language の3行が context に書かれ、
+     未初期化を検出して `--language` なしの init を案内すること。その後の
+     `openspec init --tools claude --no-animation` が成功し、schema と Language が保持され、
+     instructions に両方届き、init 後の update が「変更はありません」になること(openspec が無ければ skip)。
+     既存 config.yaml に `--language` を指定すると警告のみであること
+   - (n) no-op の update で `.openspec-e2e-kit.json` のハッシュが変化しないこと
 3. `npm test` が通ること。
 
-**完了条件**: `npm test` が exit 0 で、(a)〜(f) の各 assert 結果が出力に表示される。
+**完了条件**: `npm test` が exit 0 で、(a)〜(n) の各 assert 結果が出力に表示される
+(現行: PASS 103 / FAIL 0。openspec CLI が無い環境では連携部分が skip になる)。
 
 ### T8: reusable workflow と README
 

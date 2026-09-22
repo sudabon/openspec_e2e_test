@@ -17,6 +17,10 @@ const CONTEXT_LINES = [
 ];
 const SCHEMA_NAME = 'spec-driven-e2e';
 
+// openspec init が書く既定値。これだけは自動で SCHEMA_NAME に切り替える。
+// 進行中の change は .openspec.yaml に自分のスキーマを記録しているので影響を受けない。
+const REPLACEABLE_SCHEMAS = new Set(['spec-driven']);
+
 // payload 内の E2E ルート。導入先の実際のルートを検出して、配置先とファイル内容の
 // 両方をこの文字列から置き換える。payload 側はリテラルのまま置いておくことで、
 // プレースホルダを使わずに payload 単体でも読める・テストできる状態を保つ。
@@ -37,13 +41,15 @@ const SCAN_SKIP_DIRS = new Set([
 ]);
 const SCAN_MAX_DEPTH = 3;
 
-const USAGE = `usage: openspec-e2e-kit [install|update] [--force] [--dry-run] [--target <dir>] [--e2e-root <path>]
+const USAGE = `usage: openspec-e2e-kit [install|update] [--force] [--dry-run] [--target <dir>] [--e2e-root <path>] [--language <lang>]
 
   install            payload を対象リポジトリへ導入する(既定)
   update             install と同じ処理。出力の文言が「更新」になる
   --target <dir>     対象ディレクトリ(既定: カレントディレクトリ)
   --e2e-root <path>  E2E テストの置き場所(target 相対)。省略時は Playwright 設定の
                      testDir から自動判別し、見つからなければ ${E2E_ROOT_DEFAULT} を使う
+  --language <lang>  openspec/config.yaml を新規作成するとき、artifact の言語を指定する
+                     (openspec init --language と同じ context を書く。例: Japanese)
   --force            差分のあるファイルを上書きし、git リポジトリ確認をスキップする
   --dry-run          一切書き込まず、実行予定の操作だけを表示する
   -h, --help         このヘルプを表示する`;
@@ -51,7 +57,7 @@ const USAGE = `usage: openspec-e2e-kit [install|update] [--force] [--dry-run] [-
 // ---------------------------------------------------------------- args
 
 function parseArgs(argv) {
-  const opts = { command: null, target: null, force: false, dryRun: false, help: false, e2eRoot: null };
+  const opts = { command: null, target: null, force: false, dryRun: false, help: false, e2eRoot: null, language: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === 'install' || a === 'update') {
@@ -74,6 +80,10 @@ function parseArgs(argv) {
       const v = a.includes('=') ? a.slice('--e2e-root='.length) : argv[++i];
       if (!v) throw new UsageError('--e2e-root には値が必要です');
       opts.e2eRoot = normalizeE2eRoot(v);
+    } else if (a === '--language' || a.startsWith('--language=')) {
+      const v = a.includes('=') ? a.slice('--language='.length) : argv[++i];
+      if (!v || !v.trim()) throw new UsageError('--language には値が必要です');
+      opts.language = v.trim();
     } else {
       throw new UsageError(`不明な引数: ${a}`);
     }
@@ -282,11 +292,31 @@ function findMarkerRange(lines) {
   return { start, end, indent: lines[start].match(/^\s*/)[0] };
 }
 
+/** openspec init --language が書くものと同じ context 本文(インデントなし) */
+function languageLines(lang) {
+  return [
+    `Language: ${lang}`,
+    `All artifacts must be written in ${lang}.`,
+    'Keep OpenSpec structural headings and SHALL/MUST keywords in English.',
+  ];
+}
+
+/** context ブロック内に置く kit のマーカーブロック */
+function markerBlock(indent) {
+  return [`${indent}${MARKER_START}`, ...CONTEXT_LINES.map(l => `${indent}${l}`), `${indent}${MARKER_END}`];
+}
+
 /**
  * config.yaml を冪等にマージする。
+ *
+ * マーカーは必ず `context: |` の**内側**に置き、マーカー間には kit の行だけを入れる。
+ * 以前の版はトップレベルのマーカーで `context: |` ごと囲んでいたため、その context に
+ * 後から追記された行(Language 指定や他 kit の行)が update のたびに消えていた。
+ * 旧形式を見つけた場合は、kit 以外の行を保持したまま新形式へ移行する。
+ *
  * @returns {{text: string|null, notes: string[], warnings: string[]}} text=null は変更なし
  */
-function mergeConfig(original) {
+function mergeConfig(original, language = null) {
   const notes = [];
   const warnings = [];
 
@@ -294,13 +324,12 @@ function mergeConfig(original) {
     const text = [
       `schema: ${SCHEMA_NAME}`,
       '',
-      MARKER_START,
       'context: |',
-      ...CONTEXT_LINES.map(l => `  ${l}`),
-      MARKER_END,
+      ...(language ? languageLines(language).map(l => `  ${l}`) : []),
+      ...markerBlock('  '),
       '',
     ].join('\n');
-    notes.push(`openspec/config.yaml を新規作成 (schema: ${SCHEMA_NAME} + context ブロック)`);
+    notes.push(`openspec/config.yaml を新規作成 (schema: ${SCHEMA_NAME}${language ? `, language: ${language}` : ''} + context ブロック)`);
     return { text, notes, warnings };
   }
 
@@ -308,37 +337,66 @@ function mergeConfig(original) {
 
   // --- schema: キー ---
   const schemaKey = findTopLevelKey(lines, 'schema');
+  const schemaValue = schemaKey?.value.replace(/\s+#.*$/, '').replace(/^["']|["']$/g, '').trim();
   if (!schemaKey) {
     lines.unshift(`schema: ${SCHEMA_NAME}`);
     notes.push(`schema: ${SCHEMA_NAME} を追加`);
-  } else if (schemaKey.value !== SCHEMA_NAME) {
+  } else if (REPLACEABLE_SCHEMAS.has(schemaValue)) {
+    lines[schemaKey.index] = `schema: ${SCHEMA_NAME}`;
+    notes.push(`schema: ${schemaValue} → ${SCHEMA_NAME}(進行中の change は各自の .openspec.yaml のスキーマのまま)`);
+  } else if (schemaValue !== SCHEMA_NAME) {
     warnings.push(
-      `openspec/config.yaml の schema が '${schemaKey.value}' です。` +
-      `'${SCHEMA_NAME}' へは自動変更しません。E2E アーティファクトを使うには手動で変更してください。`
+      `openspec/config.yaml の schema が '${schemaValue}' です。` +
+      `'${SCHEMA_NAME}' へは自動変更しません。E2E アーティファクトを使うには手動で変更してください。` +
+      `\n  change 単位なら: openspec new change <name> --schema ${SCHEMA_NAME}`
     );
   }
 
   // --- context マーカーブロック ---
   const marker = findMarkerRange(lines);
-  if (marker) {
-    const body = CONTEXT_LINES.map(l => `${marker.indent}${l}`);
+  const kitLineSet = new Set(CONTEXT_LINES);
+  if (marker && marker.indent === '' && lines.slice(marker.start + 1, marker.end).some(l => /^context:\s*\|[-+]?\s*$/.test(l))) {
+    // 旧形式: トップレベルのマーカーが context: | ごと囲んでいる → 新形式へ移行
+    const inner = lines.slice(marker.start + 1, marker.end);
+    const ctxIdx = inner.findIndex(l => /^context:\s*\|[-+]?\s*$/.test(l));
+    const before = inner.slice(0, ctxIdx);                       // マーカーと context: の間(通常は空)
+    const body = inner.slice(ctxIdx + 1);
+    const indent = body.find(l => l.trim() !== '')?.match(/^\s*/)[0] || '  ';
+    const foreign = body.filter(l => l.trim() !== '' && !kitLineSet.has(l.trim()));
+    lines = [
+      ...lines.slice(0, marker.start),
+      ...before,
+      inner[ctxIdx],
+      ...foreign,
+      ...markerBlock(indent),
+      ...lines.slice(marker.end + 1),
+    ];
+    notes.push(
+      '旧形式のマーカーブロックを context の内側へ移行' +
+      (foreign.length ? `(kit 以外の ${foreign.length} 行を保持)` : '')
+    );
+  } else if (marker) {
+    // 新形式: マーカー間だけを kit の行に揃える。マーカー外の行には触らない
+    const desired = CONTEXT_LINES.map(l => `${marker.indent}${l}`);
     const current = lines.slice(marker.start + 1, marker.end);
-    const inside = current.filter(l => l.trim() !== 'context: |');
-    const hasContextKey = current.some(l => l.trim() === 'context: |');
-    const desired = hasContextKey
-      ? [`${marker.indent}context: |`, ...CONTEXT_LINES.map(l => `${marker.indent}  ${l}`)]
-      : body;
-    if (inside.join('\n') !== desired.filter(l => l.trim() !== 'context: |').join('\n')) {
-      lines = [...lines.slice(0, marker.start + 1), ...desired, ...lines.slice(marker.end)];
-      notes.push('openspec-e2e-kit マーカーブロックを更新');
+    if (current.join('\n') !== desired.join('\n')) {
+      const foreign = current.filter(l => l.trim() !== '' && !kitLineSet.has(l.trim()));
+      lines = [
+        ...lines.slice(0, marker.start),
+        ...foreign,                                              // マーカー内に紛れた他の行はマーカーの前へ退避
+        lines[marker.start],
+        ...desired,
+        ...lines.slice(marker.end),
+      ];
+      notes.push('openspec-e2e-kit マーカーブロックを更新' + (foreign.length ? `(kit 以外の ${foreign.length} 行をマーカーの外へ退避)` : ''));
     }
   } else {
     const contextKey = findTopLevelKey(lines, 'context');
     if (!contextKey) {
       while (lines.length && lines.at(-1).trim() === '') lines.pop();
-      lines.push('', MARKER_START, 'context: |', ...CONTEXT_LINES.map(l => `  ${l}`), MARKER_END, '');
+      lines.push('', 'context: |', ...markerBlock('  '), '');
       notes.push('context ブロック(マーカー付き)を追加');
-    } else if (contextKey.value === '|' || contextKey.value === '|-' || contextKey.value === '|+') {
+    } else if (/^\|[-+]?$/.test(contextKey.value)) {
       // 既存の literal block scalar の末尾に、同じインデントで追記する
       let end = contextKey.index + 1;
       let indent = null;
@@ -351,14 +409,7 @@ function mergeConfig(original) {
         end++;
       }
       while (end > contextKey.index + 1 && lines[end - 1].trim() === '') end--;
-      indent ??= '  ';
-      lines = [
-        ...lines.slice(0, end),
-        `${indent}${MARKER_START}`,
-        ...CONTEXT_LINES.map(l => `${indent}${l}`),
-        `${indent}${MARKER_END}`,
-        ...lines.slice(end),
-      ];
+      lines = [...lines.slice(0, end), ...markerBlock(indent ?? '  '), ...lines.slice(end)];
       notes.push('既存の context ブロック末尾へマーカー付きで追記');
     } else {
       warnings.push(
@@ -366,6 +417,13 @@ function mergeConfig(original) {
         `以下2行を手動で context へ追加してください:\n    ${CONTEXT_LINES.join('\n    ')}`
       );
     }
+  }
+
+  if (language && !/^\s+Language:/m.test(original)) {
+    warnings.push(
+      'openspec/config.yaml が既にあるため --language は反映しません(openspec init と同じ扱い)。\n' +
+      `  context に以下を手動で追加してください:\n    ${languageLines(language).join('\n    ')}`
+    );
   }
 
   const text = lines.join('\n');
@@ -414,9 +472,11 @@ async function main() {
   // E2E ルートの決定
   const stampPath = join(opts.target, STAMP_FILE);
   let stampRoot = null;
+  let stampData = null;
   if (existsSync(stampPath)) {
     try {
-      stampRoot = JSON.parse(readFileSync(stampPath, 'utf8')).e2eRoot ?? null;
+      stampData = JSON.parse(readFileSync(stampPath, 'utf8'));
+      stampRoot = stampData.e2eRoot ?? null;
       if (stampRoot) stampRoot = normalizeE2eRoot(stampRoot);
     } catch {
       stampRoot = null; // 壊れたスタンプは無視して検出に任せる
@@ -511,7 +571,7 @@ async function main() {
   // 3. openspec/config.yaml のマージ
   const configPath = join(opts.target, 'openspec', 'config.yaml');
   const configBefore = existsSync(configPath) ? readFileSync(configPath, 'utf8') : null;
-  const merged = mergeConfig(configBefore);
+  const merged = mergeConfig(configBefore, opts.language);
   warnings.push(...merged.warnings);
   if (merged.text !== null) {
     for (const n of merged.notes) planned.push(`config  ${n}`);
@@ -521,13 +581,16 @@ async function main() {
     }
   }
 
-  // 4. インストールスタンプ
-  planned.push(`stamp   ${STAMP_FILE} (version ${version}, e2eRoot ${e2eRoot})`);
-  if (!opts.dryRun) {
-    writeFileSync(
-      stampPath,
-      JSON.stringify({ version, installedAt: new Date().toISOString(), e2eRoot }, null, 2) + '\n',
-    );
+  // 4. インストールスタンプ(version か e2eRoot が変わったときだけ書く。no-op の update で git 差分を作らない)
+  const stampChanged = stampData?.version !== version || stampData?.e2eRoot !== e2eRoot;
+  if (stampChanged) {
+    planned.push(`stamp   ${STAMP_FILE} (version ${version}, e2eRoot ${e2eRoot})`);
+    if (!opts.dryRun) {
+      writeFileSync(
+        stampPath,
+        JSON.stringify({ version, installedAt: new Date().toISOString(), e2eRoot }, null, 2) + '\n',
+      );
+    }
   }
 
   // 5. 結果表示
@@ -549,6 +612,13 @@ async function main() {
     for (const f of skipped) console.log(`  - ${f}`);
   }
   for (const w of warnings) console.log(`\n⚠ ${w}`);
+
+  // openspec init 前に導入した場合の案内(config.yaml があると init --language はエラーになる)
+  if (!existsSync(join(opts.target, 'openspec', 'specs'))) {
+    console.log('\n次のステップ: openspec init --tools <tool>   # 例: --tools claude');
+    console.log('  ※ openspec/config.yaml が既にあるため、openspec init に --language を付けるとエラーになります。');
+    console.log('    言語はこの kit の --language で指定してください。');
+  }
 
   console.log(opts.dryRun ? `\ndry-run 完了。書き込みは行っていません。` : `\n${verb}が完了しました。`);
   return 0;
